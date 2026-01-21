@@ -41,6 +41,14 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(stb)
 
+# nlohmann_json
+FetchContent_Declare(
+    json
+    GIT_REPOSITORY https://github.com/nlohmann/json.git
+    GIT_TAG        v3.11.2
+)
+FetchContent_MakeAvailable(json)
+
 # Source Files
 file(GLOB_RECURSE SOURCES 
     "src/*.cpp"
@@ -62,6 +70,7 @@ target_include_directories(sensor_mapper PRIVATE
 target_link_libraries(sensor_mapper PRIVATE 
     glfw
     cpr::cpr
+    nlohmann_json::nlohmann_json
 )
 
 # ImGui Backend Files (need to be compiled)

@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <vector>
 
+#include "core/persistence.hpp"
 #include "core/sensor.hpp"
 #include "ui/map_widget.hpp"
 
@@ -13,6 +14,8 @@ namespace sensor_mapper {
 void render_ui(map_widget_t &map, std::vector<sensor_t> &sensors,
                int &selected_index);
 }
+
+constexpr const char *SENSORS_FILE = "sensors.json";
 
 // Main code
 int main(int, char **) {
@@ -55,7 +58,9 @@ int main(int, char **) {
   // Application State
   sensor_mapper::map_widget_t map_widget;
   std::vector<sensor_mapper::sensor_t> sensors;
-  sensors.emplace_back("Primary Sensor", -33.8688, 151.2093, 5000.0);
+
+  // Try loading
+  sensor_mapper::persistence::load_sensors(SENSORS_FILE, sensors);
   int selected_sensor_index = 0;
 
   // Main loop
@@ -101,6 +106,18 @@ void render_ui(map_widget_t &map, std::vector<sensor_t> &sensors,
   ImGui::DockSpaceOverViewport(0, ImGui::GetMainViewport());
 
   if (ImGui::Begin("Sensor Configuration")) {
+
+    // Persistence
+    if (ImGui::Button("Save Sensors")) {
+      persistence::save_sensors(SENSORS_FILE, sensors);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Load Sensors")) {
+      persistence::load_sensors(SENSORS_FILE, sensors);
+      if (selected_index >= static_cast<int>(sensors.size()))
+        selected_index = -1;
+    }
+    ImGui::Separator();
 
     // Management Buttons
     if (ImGui::Button("Add Sensor")) {
