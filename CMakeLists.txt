@@ -30,7 +30,11 @@ FetchContent_Declare(
     GIT_TAG        1.10.4
 )
 # CPR options to minimize build time/deps if needed, but defaults are usually fine for desktop
-set(CPR_USE_SYSTEM_CURL OFF CACHE BOOL "" FORCE) # Build curl from source to avoid system dep issues on Windows
+# Build curl from source, but use system OpenSSL
+set(CPR_USE_SYSTEM_CURL OFF CACHE BOOL "" FORCE)
+set(CPR_ENABLE_SSL ON CACHE BOOL "" FORCE)
+set(OPENSSL_USE_STATIC_LIBS OFF)
+find_package(OpenSSL REQUIRED)
 FetchContent_MakeAvailable(cpr)
 
 # stb_image
