@@ -1,0 +1,32 @@
+# Build directories
+build/
+out/
+bin/
+
+# CMake
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+*.cmake
+!CMakeLists.txt
+
+# IDE settings
+.vscode/
+.idea/
+*.sln
+*.vcxproj
+*.vcxproj.filters
+*.vcxproj.user
+
+# OS generated files
+.DS_Store
+Thumbs.db
+
+# Dependencies
+external/
+!src/external/
+
+# Runtime generated
+imgui.ini
+*.log
