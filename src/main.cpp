@@ -215,6 +215,28 @@ void render_ui(map_widget_t &map, std::vector<sensor_t> &sensors,
           sensor.set_mast_height(mast_height);
         }
 
+        // Directional Parameters
+        float azimuth = static_cast<float>(sensor.get_azimuth_deg());
+        if (ImGui::SliderFloat("Azimuth", &azimuth, 0.0f, 360.0f, "%.0f deg")) {
+          sensor.set_azimuth_deg(static_cast<double>(azimuth));
+        }
+
+        float beamwidth = static_cast<float>(sensor.get_beamwidth_deg());
+        if (ImGui::SliderFloat("Beamwidth", &beamwidth, 1.0f, 360.0f,
+                               "%.0f deg")) {
+          sensor.set_beamwidth_deg(static_cast<double>(beamwidth));
+        }
+
+        // Propagation Model
+        int current_model = static_cast<int>(sensor.get_propagation_model());
+        const char *model_names[] = {"Free Space", "Hata (Urban)",
+                                     "Hata (Suburban)", "Hata (Rural)"};
+        if (ImGui::Combo("Propagation Model", &current_model, model_names,
+                         IM_ARRAYSIZE(model_names))) {
+          sensor.set_propagation_model(
+              static_cast<sensor_mapper::PropagationModel>(current_model));
+        }
+
         // Display effective height
         float ground_h = 0.0f;
         float elev = 0.0f;
@@ -270,6 +292,7 @@ void render_ui(map_widget_t &map, std::vector<sensor_t> &sensors,
   if (ImGui::Begin("Map View")) {
     // RF Gradient Toggle
     ImGui::Checkbox("Show RF Signal Gradient", &map.m_show_rf_gradient);
+    ImGui::Checkbox("Show Composite Coverage", &map.m_show_composite);
     ImGui::Checkbox("Show 3D Buildings", &map.m_show_buildings);
 
     map.draw(sensors, selected_index, elevation_service,

@@ -5,6 +5,13 @@
 
 namespace sensor_mapper {
 
+enum class PropagationModel {
+  FreeSpace = 0,
+  HataUrban = 1,
+  HataSuburban = 2,
+  HataRural = 3
+};
+
 class sensor_t {
 public:
   sensor_t(const std::string &name, double latitude, double longitude,
@@ -54,6 +61,17 @@ public:
   auto get_rx_antenna_gain_dbi() const -> double;
   auto set_rx_antenna_gain_dbi(double gain) -> void;
 
+  // Directional Antenna Parameters
+  auto get_azimuth_deg() const -> double;
+  auto set_azimuth_deg(double azimuth) -> void;
+
+  auto get_beamwidth_deg() const -> double;
+  auto set_beamwidth_deg(double beamwidth) -> void;
+
+  // Propagation Model
+  auto get_propagation_model() const -> PropagationModel;
+  auto set_propagation_model(PropagationModel model) -> void;
+
 private:
   std::string m_id;
   std::string m_name;
@@ -71,6 +89,13 @@ private:
   double m_tx_antenna_gain_dbi; // TX antenna gain (dBi)
   double m_rx_sensitivity_dbm;  // RX sensitivity threshold (dBm)
   double m_rx_antenna_gain_dbi; // RX antenna gain (dBi)
+
+  // Directional Antenna
+  double m_azimuth_deg;   // 0-360 degrees (North=0, CW)
+  double m_beamwidth_deg; // 0-360 degrees
+
+  // Model
+  PropagationModel m_propagation_model;
 };
 
 } // namespace sensor_mapper

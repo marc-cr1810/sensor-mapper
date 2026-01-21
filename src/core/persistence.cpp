@@ -21,6 +21,10 @@ auto save_sensors(const std::string &filename,
                  {"mast_height", sensor.get_mast_height()},
                  {"ground_elevation", sensor.get_ground_elevation()},
                  {"use_auto_elevation", sensor.get_use_auto_elevation()},
+                 {"azimuth", sensor.get_azimuth_deg()},
+                 {"beamwidth", sensor.get_beamwidth_deg()},
+                 {"propagation_model",
+                  static_cast<int>(sensor.get_propagation_model())},
                  {"color", {color[0], color[1], color[2]}}});
   }
 
@@ -91,6 +95,16 @@ auto load_sensors(const std::string &filename, std::vector<sensor_t> &sensors)
       color_ptr[1] = color[1];
       color_ptr[2] = color[2];
     }
+
+    // Load Directional & Model params
+    double azimuth = item.value("azimuth", 0.0);
+    double beamwidth = item.value("beamwidth", 360.0);
+    int model_int = item.value("propagation_model", 0);
+
+    sensors.back().set_azimuth_deg(azimuth);
+    sensors.back().set_beamwidth_deg(beamwidth);
+    sensors.back().set_propagation_model(
+        static_cast<PropagationModel>(model_int));
   }
 
   return true;

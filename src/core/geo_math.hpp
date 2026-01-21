@@ -70,5 +70,39 @@ inline auto destination_point(double lat, double lon, double dist_m,
   out_lon = lon2_rad * 180.0 / PI;
 }
 
+// Calculate bearing from point A to point B in degrees
+inline auto bearing(double lat1, double lon1, double lat2, double lon2)
+    -> double {
+  double lat1_rad = lat1 * PI / 180.0;
+  double lat2_rad = lat2 * PI / 180.0;
+  double delta_lon_rad = (lon2 - lon1) * PI / 180.0;
+
+  double y = std::sin(delta_lon_rad) * std::cos(lat2_rad);
+  double x = std::cos(lat1_rad) * std::sin(lat2_rad) -
+             std::sin(lat1_rad) * std::cos(lat2_rad) * std::cos(delta_lon_rad);
+  double theta = std::atan2(y, x);
+
+  // Convert to degrees and normalize to 0-360
+  double bearing_deg = theta * 180.0 / PI;
+  if (bearing_deg < 0.0)
+    bearing_deg += 360.0;
+  return bearing_deg;
+}
+
+// Calculate distance between two points in meters (Haversine)
+inline auto distance(double lat1, double lon1, double lat2, double lon2)
+    -> double {
+  double lat1_rad = lat1 * PI / 180.0;
+  double lat2_rad = lat2 * PI / 180.0;
+  double delta_lat = (lat2 - lat1) * PI / 180.0;
+  double delta_lon = (lon2 - lon1) * PI / 180.0;
+
+  double a = std::sin(delta_lat / 2.0) * std::sin(delta_lat / 2.0) +
+             std::cos(lat1_rad) * std::cos(lat2_rad) *
+                 std::sin(delta_lon / 2.0) * std::sin(delta_lon / 2.0);
+  double c = 2.0 * std::atan2(std::sqrt(a), std::sqrt(1.0 - a));
+  return EARTH_RADIUS * c;
+}
+
 } // namespace geo
 } // namespace sensor_mapper

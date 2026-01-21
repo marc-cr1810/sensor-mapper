@@ -24,8 +24,9 @@ sensor_t::sensor_t(const std::string &name, double latitude, double longitude,
       m_frequency_mhz(915.0),       // 915 MHz ISM band (US)
       m_tx_antenna_gain_dbi(2.15),  // Dipole antenna
       m_rx_sensitivity_dbm(-120.0), // Typical LoRa sensitivity
-      m_rx_antenna_gain_dbi(0.0)    // Drone omni antenna
-{
+      m_rx_antenna_gain_dbi(0.0),   // Drone omni antenna
+      m_azimuth_deg(0.0), m_beamwidth_deg(360.0),
+      m_propagation_model(PropagationModel::FreeSpace) {
   // Random color logic...
   m_color = {static_cast<float>(rand()) / static_cast<float>(RAND_MAX),
              static_cast<float>(rand()) / static_cast<float>(RAND_MAX),
@@ -106,6 +107,23 @@ auto sensor_t::get_rx_antenna_gain_dbi() const -> double {
 }
 auto sensor_t::set_rx_antenna_gain_dbi(double gain) -> void {
   m_rx_antenna_gain_dbi = gain;
+}
+
+auto sensor_t::get_azimuth_deg() const -> double { return m_azimuth_deg; }
+auto sensor_t::set_azimuth_deg(double azimuth) -> void {
+  m_azimuth_deg = azimuth;
+}
+
+auto sensor_t::get_beamwidth_deg() const -> double { return m_beamwidth_deg; }
+auto sensor_t::set_beamwidth_deg(double beamwidth) -> void {
+  m_beamwidth_deg = beamwidth;
+}
+
+auto sensor_t::get_propagation_model() const -> PropagationModel {
+  return m_propagation_model;
+}
+auto sensor_t::set_propagation_model(PropagationModel model) -> void {
+  m_propagation_model = model;
 }
 
 } // namespace sensor_mapper

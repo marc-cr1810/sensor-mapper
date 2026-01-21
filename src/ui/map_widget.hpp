@@ -37,6 +37,7 @@ public:
   auto get_mouse_lon() const -> double { return m_mouse_lon; }
 
   bool m_show_rf_gradient; // Show RF signal strength gradient (default: off)
+  bool m_show_composite = false;
   bool m_show_buildings = false;
 
 private:
