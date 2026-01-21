@@ -7,7 +7,6 @@
 #include <memory>
 #include <vector>
 
-
 namespace sensor_mapper {
 
 class map_widget_t {
@@ -16,7 +15,7 @@ public:
   ~map_widget_t();
 
   auto update() -> void;
-  auto draw(const std::vector<sensor_t> &sensors, int selected_index,
+  auto draw(const std::vector<sensor_t> &sensors, int &selected_index,
             std::function<void(double, double)> on_add_sensor) -> void;
 
   auto set_center(double lat, double lon) -> void;

@@ -32,7 +32,7 @@ auto map_widget_t::set_zoom(double zoom) -> void {
 auto map_widget_t::get_zoom() const -> double { return m_zoom; }
 
 auto map_widget_t::draw(const std::vector<sensor_t> &sensors,
-                        int selected_index,
+                        int &selected_index,
                         std::function<void(double, double)> on_add_sensor)
     -> void {
   // Update async tasks
@@ -299,6 +299,17 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors,
     if (is_selected) {
       draw_list->AddCircle(ImVec2(cx, cy), 8.0f, IM_COL32(255, 255, 0, 255), 0,
                            2.0f);
+    }
+
+    // Hit Test for Selection
+    // Check distance from cursor to center marker
+    if (is_hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left)) {
+      float dx = io.MousePos.x - cx;
+      float dy = io.MousePos.y - cy;
+      // 10 pixel radius threshold (squared is 100)
+      if (dx * dx + dy * dy < 100.0f) {
+        selected_index = static_cast<int>(idx);
+      }
     }
   }
 
