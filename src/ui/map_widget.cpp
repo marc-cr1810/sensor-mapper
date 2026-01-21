@@ -10,7 +10,7 @@ namespace sensor_mapper {
 map_widget_t::map_widget_t()
     : m_center_lat(-33.8688) // Sydney
       ,
-      m_center_lon(151.2093), m_zoom(10.0),
+      m_center_lon(151.2093), m_zoom(10.0), m_show_rf_gradient(false),
       m_tile_service(std::make_unique<tile_service_t>()) {}
 
 map_widget_t::~map_widget_t() {}
@@ -518,61 +518,66 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors,
     float cy = static_cast<float>((c_wy - center_wy) * world_size_pixels +
                                   screen_center.y);
 
-    // Draw Gradient Fill (RF Signal Strength Heat Map)
-    // Green (strong) → Yellow (moderate) → Red (weak signal)
+    // Draw Fill
     if (!points.empty()) {
       ImVec2 center_pt = ImVec2(cx, cy);
-
-      // Center color: Bright Green (excellent signal)
       ImU32 center_col =
           is_selected ? IM_COL32(0, 255, 0, 220) : IM_COL32(0, 220, 0, 180);
 
-      // Helper lambda to convert cached dBm to color
-      auto dbm_to_color = [](double p_rx_dbm) -> ImU32 {
-        int r, g, b, a;
-        if (p_rx_dbm >= -60.0) {
-          r = 0;
-          g = 255;
-          b = 0;
-          a = 200;
-        } else if (p_rx_dbm >= -80.0) {
-          float t = (p_rx_dbm + 80.0) / 20.0;
-          r = static_cast<int>((1.0f - t) * 255);
-          g = 255;
-          b = 0;
-          a = 180;
-        } else if (p_rx_dbm >= -100.0) {
-          float t = (p_rx_dbm + 100.0) / 20.0;
-          r = 255;
-          g = static_cast<int>(t * 255);
-          b = 0;
-          a = 120;
-        } else {
-          float t = std::max(0.0, (p_rx_dbm + 120.0) / 20.0);
-          r = 255;
-          g = 0;
-          b = 0;
-          a = static_cast<int>(t * 80);
+      if (m_show_rf_gradient && !m_view_cache[s_id].signal_dbm.empty()) {
+        // RF Gradient Mode: Use cached signal strength
+        auto dbm_to_color = [](double p_rx_dbm) -> ImU32 {
+          int r, g, b, a;
+          if (p_rx_dbm >= -60.0) {
+            r = 0;
+            g = 255;
+            b = 0;
+            a = 200;
+          } else if (p_rx_dbm >= -80.0) {
+            float t = (p_rx_dbm + 80.0) / 20.0;
+            r = static_cast<int>((1.0f - t) * 255);
+            g = 255;
+            b = 0;
+            a = 180;
+          } else if (p_rx_dbm >= -100.0) {
+            float t = (p_rx_dbm + 100.0) / 20.0;
+            r = 255;
+            g = static_cast<int>(t * 255);
+            b = 0;
+            a = 120;
+          } else {
+            float t = std::max(0.0, (p_rx_dbm + 120.0) / 20.0);
+            r = 255;
+            g = 0;
+            b = 0;
+            a = static_cast<int>(t * 80);
+          }
+          return IM_COL32(r, g, b, a);
+        };
+
+        const ImVec2 uv = ImGui::GetFontTexUvWhitePixel();
+        auto &cached_signal = m_view_cache[s_id].signal_dbm;
+
+        for (size_t i = 0; i < points.size(); ++i) {
+          ImU32 edge_col1 = dbm_to_color(cached_signal[i]);
+          ImU32 edge_col2 =
+              dbm_to_color(cached_signal[(i + 1) % points.size()]);
+
+          draw_list->PrimReserve(3, 3);
+          draw_list->PrimWriteVtx(center_pt, uv, center_col);
+          draw_list->PrimWriteVtx(points[i], uv, edge_col1);
+          draw_list->PrimWriteVtx(points[(i + 1) % points.size()], uv,
+                                  edge_col2);
+          draw_list->PrimWriteIdx((ImDrawIdx)(draw_list->_VtxCurrentIdx - 3));
+          draw_list->PrimWriteIdx((ImDrawIdx)(draw_list->_VtxCurrentIdx - 2));
+          draw_list->PrimWriteIdx((ImDrawIdx)(draw_list->_VtxCurrentIdx - 1));
         }
-        return IM_COL32(r, g, b, a);
-      };
-
-      // Draw each triangle using cached signal strength
-      const ImVec2 uv = ImGui::GetFontTexUvWhitePixel();
-      auto &cached_signal = m_view_cache[s_id].signal_dbm;
-
-      for (size_t i = 0; i < points.size(); ++i) {
-        // Use cached signal strength values - NO recalculation!
-        ImU32 edge_col1 = dbm_to_color(cached_signal[i]);
-        ImU32 edge_col2 = dbm_to_color(cached_signal[(i + 1) % points.size()]);
-
-        draw_list->PrimReserve(3, 3);
-        draw_list->PrimWriteVtx(center_pt, uv, center_col);
-        draw_list->PrimWriteVtx(points[i], uv, edge_col1);
-        draw_list->PrimWriteVtx(points[(i + 1) % points.size()], uv, edge_col2);
-        draw_list->PrimWriteIdx((ImDrawIdx)(draw_list->_VtxCurrentIdx - 3));
-        draw_list->PrimWriteIdx((ImDrawIdx)(draw_list->_VtxCurrentIdx - 2));
-        draw_list->PrimWriteIdx((ImDrawIdx)(draw_list->_VtxCurrentIdx - 1));
+      } else {
+        // Solid Fill Mode (default)
+        for (size_t i = 0; i < points.size(); ++i) {
+          draw_list->AddTriangleFilled(
+              center_pt, points[i], points[(i + 1) % points.size()], fill_col);
+        }
       }
     }
 

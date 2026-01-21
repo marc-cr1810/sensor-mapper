@@ -28,6 +28,8 @@ public:
 
   auto get_zoom() const -> double;
 
+  bool m_show_rf_gradient; // Show RF signal strength gradient (default: off)
+
 private:
   double m_center_lat;
   double m_center_lon;
