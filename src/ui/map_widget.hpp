@@ -23,6 +23,8 @@ public:
   auto set_center(double lat, double lon) -> void;
   auto set_zoom(double zoom) -> void;
 
+  auto set_map_source(int source_index) -> void;
+
   auto get_zoom() const -> double;
 
 private:

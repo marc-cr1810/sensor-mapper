@@ -3,7 +3,6 @@
 #include <format>
 #include <iostream>
 
-
 namespace sensor_mapper {
 
 tile_service_t::tile_service_t() {}
@@ -13,6 +12,18 @@ tile_service_t::~tile_service_t() {}
 auto tile_service_t::make_key(int z, int x, int y) -> tile_key_t {
   return std::format("{}/{}/{}", z, x, y);
 }
+
+auto tile_service_t::set_source(tile_source_t source) -> void {
+  if (m_source != source) {
+    m_source = source;
+    // Clear cache to force reload
+    m_cache.clear();
+    m_pending.clear();
+    m_loading_keys.clear();
+  }
+}
+
+auto tile_service_t::get_source() const -> tile_source_t { return m_source; }
 
 auto tile_service_t::get_tile(int z, int x, int y)
     -> std::shared_ptr<texture_t> {
@@ -33,10 +44,15 @@ auto tile_service_t::get_tile(int z, int x, int y)
   // Start fetch
   m_loading_keys.push_back(key);
 
-  // Use OpenStreetMap standard tile server
-  // Note: In a real app, should respect User-Agent and usage policies.
-  std::string url =
-      std::format("https://tile.openstreetmap.org/{}/{}/{}.png", z, x, y);
+  std::string url;
+  if (m_source == tile_source_t::OSM) {
+    url = std::format("https://tile.openstreetmap.org/{}/{}/{}.png", z, x, y);
+  } else {
+    // AWS Terrain Tiles (Mapzen Terrarium)
+    url = std::format("https://s3.amazonaws.com/elevation-tiles-prod/"
+                      "terrarium/{}/{}/{}.png",
+                      z, x, y);
+  }
 
   m_pending.push_back({z, x, y, std::async(std::launch::async, [url]() {
                          cpr::Response r = cpr::Get(

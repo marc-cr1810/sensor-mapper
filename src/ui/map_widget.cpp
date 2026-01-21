@@ -29,6 +29,14 @@ auto map_widget_t::set_zoom(double zoom) -> void {
     m_zoom = 19.0;
 }
 
+auto map_widget_t::set_map_source(int source_index) -> void {
+  if (source_index == 0) {
+    m_tile_service->set_source(tile_service_t::tile_source_t::OSM);
+  } else {
+    m_tile_service->set_source(tile_service_t::tile_source_t::TERRARIUM);
+  }
+}
+
 auto map_widget_t::get_zoom() const -> double { return m_zoom; }
 
 auto map_widget_t::draw(const std::vector<sensor_t> &sensors,
@@ -47,7 +55,15 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors,
     set_zoom(m_zoom + 1.0);
   ImGui::SameLine();
   if (ImGui::Button("Zoom Out"))
-    set_zoom(m_zoom - 1.0);
+    if (ImGui::Button("Zoom Out"))
+      set_zoom(m_zoom - 1.0);
+
+  ImGui::SameLine();
+  static int current_source = 0;
+  if (ImGui::Combo("Map Source", &current_source,
+                   "OpenStreetMap\0Terrain Heightmap\0")) {
+    set_map_source(current_source);
+  }
 
   // Simple canvas
   ImVec2 canvas_p0 = ImGui::GetCursorScreenPos();
