@@ -33,6 +33,7 @@ auto map_widget_t::get_zoom() const -> double { return m_zoom; }
 
 auto map_widget_t::draw(const std::vector<sensor_t> &sensors,
                         int &selected_index,
+                        elevation_service_t &elevation_service,
                         std::function<void(double, double)> on_add_sensor)
     -> void {
   // Update async tasks
@@ -233,31 +234,73 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors,
     double s_lon = sensor.get_longitude();
     double range_m = sensor.get_range();
 
-    // Calculate approximation in degrees
-    constexpr double METERS_PER_DEG_LAT = 111132.0;
-    double meters_per_deg_lon = 111132.0 * std::cos(s_lat * geo::PI / 180.0);
-    if (meters_per_deg_lon < 1.0)
-      meters_per_deg_lon = 1.0;
+    // Attempt to get elevation for Occlusion Casting
+    float sensor_h;
+    bool has_elevation =
+        elevation_service.get_elevation(s_lat, s_lon, sensor_h);
+    // Assume mast height of 10m
+    if (has_elevation) {
+      sensor_h += 10.0f;
+    }
 
-    double radius_deg_lat = range_m / METERS_PER_DEG_LAT;
-    double radius_deg_lon = range_m / meters_per_deg_lon;
-
-    const int segments = 64;
+    const int segments = 360; // 1 degree precision
     std::vector<ImVec2> points;
     points.reserve(segments);
 
     for (int i = 0; i < segments; ++i) {
-      double angle = (2.0 * geo::PI * i) / segments;
-      double d_lat = radius_deg_lat * std::sin(angle);
-      double d_lon = radius_deg_lon * std::cos(angle);
+      double angle = (360.0 / segments) * i;
+      double visible_dist = range_m;
 
-      double p_lat = s_lat + d_lat;
-      double p_lon = s_lon + d_lon;
+      // Raycast if we have elevation data
+      if (has_elevation) {
+        const double step_size = 50.0; // Check every 50m
+        double current_dist = 0.0;
+        double max_slope = -1000.0; // Start with very low slope
+
+        while (current_dist < range_m) {
+          current_dist += step_size;
+          if (current_dist > range_m)
+            current_dist = range_m;
+
+          double t_lat, t_lon;
+          geo::destination_point(s_lat, s_lon, current_dist, angle, t_lat,
+                                 t_lon);
+
+          float target_h;
+          if (elevation_service.get_elevation(t_lat, t_lon, target_h)) {
+            double slope = (target_h - sensor_h) / current_dist;
+
+            // If new point is "below" the highest slope seen so far, it is
+            // occluded Actually this logic assumes we are looking *up*.
+            // Standard LOS: if slope > max_slope, it is visible and becomes new
+            // max_slope. If slope <= max_slope, it is hidden by the previous
+            // higher point.
+
+            if (slope > max_slope) {
+              // Visible
+              max_slope = slope;
+            } else {
+              // Occluded
+              visible_dist = current_dist - step_size;
+              // Simple binary search refinement could happen here, keeping it
+              // simple
+              if (visible_dist < 0)
+                visible_dist = 0;
+              break;
+            }
+          }
+          if (current_dist >= range_m)
+            break;
+        }
+      }
+
+      double p_lat, p_lon;
+      geo::destination_point(s_lat, s_lon, visible_dist, angle, p_lat, p_lon);
 
       double p_wx, p_wy;
       geo::lat_lon_to_world(p_lat, p_lon, p_wx, p_wy);
 
-      // Simple Wrap check logic for drawing
+      // Simple Wrap check
       if (p_wx - center_wx > 0.5)
         p_wx -= 1.0;
       if (p_wx - center_wx < -0.5)
@@ -280,11 +323,7 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors,
         is_selected ? IM_COL32(255, 255, 0, 255) : IM_COL32(0, 255, 0, 255);
     float thickness = is_selected ? 3.0f : 2.0f;
 
-    draw_list->AddConvexPolyFilled(points.data(), segments, fill_col);
-    draw_list->AddPolyline(points.data(), segments, border_col, true,
-                           thickness);
-
-    // Draw center marker
+    // Calculate center screen pos (needed for triangle fan)
     double c_wx, c_wy;
     geo::lat_lon_to_world(s_lat, s_lon, c_wx, c_wy);
     if (c_wx - center_wx > 0.5)
@@ -296,6 +335,19 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors,
                                   screen_center.x);
     float cy = static_cast<float>((c_wy - center_wy) * world_size_pixels +
                                   screen_center.y);
+
+    // Draw Fill (Triangle Fan for star-shaped non-convex polygon)
+    if (!points.empty()) {
+      ImVec2 center_pt = ImVec2(cx, cy);
+      for (size_t i = 0; i < points.size(); ++i) {
+        draw_list->AddTriangleFilled(center_pt, points[i],
+                                     points[(i + 1) % points.size()], fill_col);
+      }
+    }
+
+    // Draw Border
+    draw_list->AddPolyline(points.data(), (int)points.size(), border_col, true,
+                           thickness);
 
     // Use solid color for marker
     ImU32 marker_col =

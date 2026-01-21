@@ -12,7 +12,7 @@
 // Forward declaration
 namespace sensor_mapper {
 void render_ui(map_widget_t &map, std::vector<sensor_t> &sensors,
-               int &selected_index);
+               int &selected_index, elevation_service_t &elevation_service);
 }
 
 constexpr const char *SENSORS_FILE = "sensors.json";
@@ -57,6 +57,7 @@ int main(int, char **) {
 
   // Application State
   sensor_mapper::map_widget_t map_widget;
+  sensor_mapper::elevation_service_t elevation_service;
   std::vector<sensor_mapper::sensor_t> sensors;
 
   // Try loading
@@ -68,13 +69,17 @@ int main(int, char **) {
     // Poll and handle events
     glfwPollEvents();
 
+    // Update services
+    elevation_service.update();
+
     // Start the Dear ImGui frame
     ImGui_ImplOpenGL3_NewFrame();
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
 
     // Core UI Logic
-    sensor_mapper::render_ui(map_widget, sensors, selected_sensor_index);
+    sensor_mapper::render_ui(map_widget, sensors, selected_sensor_index,
+                             elevation_service);
 
     // Rendering
     ImGui::Render();
@@ -101,7 +106,7 @@ int main(int, char **) {
 
 namespace sensor_mapper {
 void render_ui(map_widget_t &map, std::vector<sensor_t> &sensors,
-               int &selected_index) {
+               int &selected_index, elevation_service_t &elevation_service) {
   // Dockspace
   ImGui::DockSpaceOverViewport(0, ImGui::GetMainViewport());
 
@@ -190,11 +195,12 @@ void render_ui(map_widget_t &map, std::vector<sensor_t> &sensors,
   ImGui::End();
 
   if (ImGui::Begin("Map View")) {
-    map.draw(sensors, selected_index, [&](double lat, double lon) {
-      // Callback for adding sensor from map
-      sensors.emplace_back("New Sensor", lat, lon, 2000.0);
-      selected_index = static_cast<int>(sensors.size()) - 1;
-    });
+    map.draw(sensors, selected_index, elevation_service,
+             [&](double lat, double lon) {
+               // Callback for adding sensor from map
+               sensors.emplace_back("New Sensor", lat, lon, 2000.0);
+               selected_index = static_cast<int>(sensors.size()) - 1;
+             });
   }
   ImGui::End();
 }

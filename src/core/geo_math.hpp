@@ -46,5 +46,29 @@ inline auto world_to_lat_lon(double wx, double wy, double &out_lat,
   double n = PI - 2.0 * PI * wy;
   out_lat = (180.0 / PI) * std::atan(0.5 * (std::exp(n) - std::exp(-n)));
 }
+
+// Move a point by distance (meters) and bearing (degrees)
+inline auto destination_point(double lat, double lon, double dist_m,
+                              double bearing_deg, double &out_lat,
+                              double &out_lon) -> void {
+  double r_earth = EARTH_RADIUS;
+  double lat_rad = lat * PI / 180.0;
+  double lon_rad = lon * PI / 180.0;
+  double bearing_rad = bearing_deg * PI / 180.0;
+  double angular_dist = dist_m / r_earth;
+
+  double lat2_rad = std::asin(std::sin(lat_rad) * std::cos(angular_dist) +
+                              std::cos(lat_rad) * std::sin(angular_dist) *
+                                  std::cos(bearing_rad));
+  double lon2_rad =
+      lon_rad +
+      std::atan2(
+          std::sin(bearing_rad) * std::sin(angular_dist) * std::cos(lat_rad),
+          std::cos(angular_dist) - std::sin(lat_rad) * std::sin(lat2_rad));
+
+  out_lat = lat2_rad * 180.0 / PI;
+  out_lon = lon2_rad * 180.0 / PI;
+}
+
 } // namespace geo
 } // namespace sensor_mapper

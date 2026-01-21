@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/elevation_service.hpp"
 #include "core/sensor.hpp"
 #include "core/tile_service.hpp"
 #include "imgui.h"
@@ -16,6 +17,7 @@ public:
 
   auto update() -> void;
   auto draw(const std::vector<sensor_t> &sensors, int &selected_index,
+            elevation_service_t &elevation_service,
             std::function<void(double, double)> on_add_sensor) -> void;
 
   auto set_center(double lat, double lon) -> void;
