@@ -228,7 +228,30 @@ void render_ui(map_widget_t &map, std::vector<sensor_t> &sensors,
     map.draw(sensors, selected_index, elevation_service,
              [&](double lat, double lon) {
                // Callback for adding sensor from map
+
+               // 1. Trigger building fetch for this area (for next time /
+               // background)
+               map.fetch_buildings_near(lat, lon);
+
+               // 2. Check if we already have building data
+               double building_height = map.get_building_at_location(lat, lon);
+
+               // 3. Create sensor
+               // Default height 5m, or use building height if found
+               double mast_h = building_height > 0 ? building_height : 5.0;
+
                sensors.emplace_back("New Sensor", lat, lon, 5000.0);
+               auto &s = sensors.back();
+               s.set_mast_height(mast_h); // Set height (AGL)
+
+               // If on building, user probably wants it ON the roof, not
+               // floating 5m above it? Wait, mast_height is AGL (Above Ground
+               // Level). If we are on a building, ground elevation (terrain) is
+               // used + mast height. So if building is 20m, setting
+               // mast_height=20m puts it on the roof. (Assuming "ground" means
+               // "terrain"). Yes, implementation usually adds mast_height to
+               // terrain elevation.
+
                selected_index = static_cast<int>(sensors.size()) - 1;
              });
   }

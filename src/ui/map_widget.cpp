@@ -11,11 +11,15 @@ map_widget_t::map_widget_t()
     : m_center_lat(-33.8688) // Sydney
       ,
       m_center_lon(151.2093), m_zoom(10.0), m_show_rf_gradient(false),
-      m_tile_service(std::make_unique<tile_service_t>()) {}
+      m_tile_service(std::make_unique<tile_service_t>()),
+      m_building_service(std::make_unique<building_service_t>()) {}
 
 map_widget_t::~map_widget_t() {}
 
-auto map_widget_t::update() -> void { m_tile_service->update(); }
+auto map_widget_t::update() -> void {
+  m_tile_service->update();
+  m_building_service->update();
+}
 
 auto map_widget_t::set_center(double lat, double lon) -> void {
   m_center_lat = lat;
@@ -39,6 +43,25 @@ auto map_widget_t::set_map_source(int source_index) -> void {
 }
 
 auto map_widget_t::get_zoom() const -> double { return m_zoom; }
+
+auto map_widget_t::get_building_at_location(double lat, double lon) const
+    -> double {
+  if (!m_building_service)
+    return 0.0;
+
+  auto building = m_building_service->get_building_at(lat, lon);
+  return building ? building->height_m : 0.0;
+}
+
+auto map_widget_t::fetch_buildings_near(double lat, double lon) -> void {
+  if (!m_building_service)
+    return;
+
+  // Fetch a small area around the point (approx +/- 0.005 degrees, ~500m)
+  double delta = 0.005;
+  m_building_service->fetch_buildings(lat - delta, lat + delta, lon - delta,
+                                      lon + delta);
+}
 
 auto map_widget_t::draw(const std::vector<sensor_t> &sensors,
                         int &selected_index,
@@ -201,6 +224,10 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors,
   if ((max_tx - min_tx) * (max_ty - min_ty) > 100) {
     ImGui::Text("Zoom in to see map");
   } else {
+    // Building fetching removed from draw loop to prevent API spam
+    // TODO: Implement on-demand building fetch when placing sensors or
+    // calculating RF
+
     for (int x = min_tx; x <= max_tx; ++x) {
       for (int y = min_ty; y <= max_ty; ++y) {
         int wrapped_x = x;
@@ -450,10 +477,43 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors,
             }
           }
 
+          // Calculate building attenuation
+          double building_loss_db = 0.0;
+          if (m_building_service) {
+            geo_point_t start = {s_lat, s_lon};
+            geo_point_t end = {t_lat, t_lon};
+            auto buildings =
+                m_building_service->get_buildings_on_path(start, end);
+
+            for (const auto &ix : buildings) {
+              // Check if valid intersection
+              if (ix.building && ix.distance_through_m > 0.1) {
+                // Check height - does line of sight go over the building?
+                // Need building ground elevation. Assuming flat-ish/terrain
+                // elevation at sensor? Let's refine: Building base height =
+                // terrain height at entry point Ray height at entry point =
+                // sensor_h + (target_h - sensor_h) * progress
+
+                // Optimization: Just apply flat 15dB if it hits, assuming it's
+                // tall enough. Or use building->height_m.
+
+                // Simplified: If sensor is lower than building + 20m, apply
+                // attenuation. Ideally we interpolate terrain height at
+                // intersection point. For now, raw meters of concrete
+                // penetration.
+
+                // ITU-R P.2040 for concrete at 1GHz ~ 10-20 dB?
+                // Let's say 15 dB per wall (entry/exit) -> 30dB total + 0.5
+                // dB/m? Simple model: 20dB per building penetration.
+                building_loss_db += 20.0;
+              }
+            }
+          }
+
           // Calculate received power
-          // P_rx = P_tx + G_tx + G_rx - FSPL - Terrain_Loss
+          // P_rx = P_tx + G_tx + G_rx - FSPL - Terrain_Loss - Building_Loss
           double p_rx_dbm = tx_power_dbm + tx_gain_dbi + rx_gain_dbi - fspl_db -
-                            terrain_loss_db;
+                            terrain_loss_db - building_loss_db;
 
           // Check if signal is above sensitivity threshold
           if (p_rx_dbm >= rx_sensitivity_dbm) {

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/building_service.hpp"
 #include "core/elevation_service.hpp"
 #include "core/sensor.hpp"
 #include "core/tile_service.hpp"
@@ -20,6 +21,10 @@ public:
   auto draw(const std::vector<sensor_t> &sensors, int &selected_index,
             elevation_service_t &elevation_service,
             std::function<void(double, double)> on_add_sensor) -> void;
+
+  auto get_building_at_location(double lat, double lon) const
+      -> double; // Returns height or 0
+  auto fetch_buildings_near(double lat, double lon) -> void;
 
   auto set_center(double lat, double lon) -> void;
   auto set_zoom(double zoom) -> void;
@@ -45,6 +50,7 @@ private:
   std::map<std::string, cached_view_t> m_view_cache;
 
   std::unique_ptr<tile_service_t> m_tile_service;
+  std::unique_ptr<building_service_t> m_building_service;
 };
 
 } // namespace sensor_mapper
