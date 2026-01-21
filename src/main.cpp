@@ -228,7 +228,7 @@ void render_ui(map_widget_t &map, std::vector<sensor_t> &sensors,
     map.draw(sensors, selected_index, elevation_service,
              [&](double lat, double lon) {
                // Callback for adding sensor from map
-               sensors.emplace_back("New Sensor", lat, lon, 2000.0);
+               sensors.emplace_back("New Sensor", lat, lon, 5000.0);
                selected_index = static_cast<int>(sensors.size()) - 1;
              });
   }

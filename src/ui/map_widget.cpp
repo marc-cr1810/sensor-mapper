@@ -236,7 +236,44 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors,
           draw_list->AddImage((ImTextureID)(intptr_t)texture->get_id(), p_min,
                               p_max);
         } else {
-          draw_list->AddRect(p_min, p_max, IM_COL32(255, 255, 255, 30));
+          // Progressive tile loading: try parent tiles at lower zoom levels
+          bool found_fallback = false;
+          for (int fallback_zoom = tile_zoom - 1; fallback_zoom >= 0;
+               --fallback_zoom) {
+            // Calculate parent tile coordinates
+            int zoom_diff = tile_zoom - fallback_zoom;
+            int parent_tx = wrapped_x >> zoom_diff;
+            int parent_ty = y >> zoom_diff;
+
+            // Get parent tile
+            auto parent_texture =
+                m_tile_service->get_tile(fallback_zoom, parent_tx, parent_ty);
+            if (parent_texture && parent_texture->is_valid()) {
+              // Calculate which portion of the parent tile to show
+              // The parent tile covers 2^zoom_diff tiles in each direction
+              int tiles_per_parent = 1 << zoom_diff;
+              int sub_x = wrapped_x - (parent_tx << zoom_diff);
+              int sub_y = y - (parent_ty << zoom_diff);
+
+              // Calculate UV coordinates for the sub-region
+              float uv_scale = 1.0f / tiles_per_parent;
+              ImVec2 uv_min(sub_x * uv_scale, sub_y * uv_scale);
+              ImVec2 uv_max((sub_x + 1) * uv_scale, (sub_y + 1) * uv_scale);
+
+              // Render the zoomed portion of parent tile
+              draw_list->AddImage(
+                  (ImTextureID)(intptr_t)parent_texture->get_id(), p_min, p_max,
+                  uv_min, uv_max);
+              found_fallback = true;
+              break;
+            }
+          }
+
+          // If no fallback found, show subtle placeholder
+          if (!found_fallback) {
+            draw_list->AddRectFilled(p_min, p_max, IM_COL32(40, 40, 40, 255));
+            draw_list->AddRect(p_min, p_max, IM_COL32(80, 80, 80, 100));
+          }
         }
       }
     }
