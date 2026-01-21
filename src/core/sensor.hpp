@@ -38,6 +38,22 @@ public:
   auto get_id() const -> const std::string &;
   auto set_id(const std::string &id) -> void;
 
+  // RF Propagation Parameters
+  auto get_tx_power_dbm() const -> double;
+  auto set_tx_power_dbm(double power) -> void;
+
+  auto get_frequency_mhz() const -> double;
+  auto set_frequency_mhz(double freq) -> void;
+
+  auto get_tx_antenna_gain_dbi() const -> double;
+  auto set_tx_antenna_gain_dbi(double gain) -> void;
+
+  auto get_rx_sensitivity_dbm() const -> double;
+  auto set_rx_sensitivity_dbm(double sensitivity) -> void;
+
+  auto get_rx_antenna_gain_dbi() const -> double;
+  auto set_rx_antenna_gain_dbi(double gain) -> void;
+
 private:
   std::string m_id;
   std::string m_name;
@@ -48,6 +64,13 @@ private:
   double m_ground_elevation;
   bool m_use_auto_elevation;
   std::array<float, 3> m_color;
+
+  // RF Propagation Parameters
+  double m_tx_power_dbm;        // Transmit power (dBm)
+  double m_frequency_mhz;       // Operating frequency (MHz)
+  double m_tx_antenna_gain_dbi; // TX antenna gain (dBi)
+  double m_rx_sensitivity_dbm;  // RX sensitivity threshold (dBm)
+  double m_rx_antenna_gain_dbi; // RX antenna gain (dBi)
 };
 
 } // namespace sensor_mapper

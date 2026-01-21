@@ -37,7 +37,8 @@ private:
 
   struct cached_view_t {
     std::string hash_key;
-    std::vector<ImVec2> points;
+    std::vector<ImVec2> points;     // Lat/Lon coordinates
+    std::vector<double> signal_dbm; // Pre-calculated signal strength (dBm)
   };
   std::map<std::string, cached_view_t> m_view_cache;
 

@@ -331,52 +331,149 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors,
       // Cache Miss - Recalculate
       const int segments = 360; // 1 degree precision
       std::vector<ImVec2> new_cache_latlons;
+      std::vector<double> new_cache_signal_dbm;
       new_cache_latlons.reserve(segments);
+      new_cache_signal_dbm.reserve(segments);
       points.reserve(segments);
+
+      // Get RF parameters for propagation calculation
+      double tx_power_dbm = sensor.get_tx_power_dbm();
+      double frequency_mhz = sensor.get_frequency_mhz();
+      double tx_gain_dbi = sensor.get_tx_antenna_gain_dbi();
+      double rx_gain_dbi = sensor.get_rx_antenna_gain_dbi();
+      double rx_sensitivity_dbm = sensor.get_rx_sensitivity_dbm();
 
       for (int i = 0; i < segments; ++i) {
         double angle = (360.0 / segments) * i;
-        double visible_dist = range_m;
 
-        // Raycast if we have elevation data
-        if (has_elevation) {
-          const double step_size = 50.0; // Check every 50m
-          double current_dist = 0.0;
-          double max_slope = -1000.0; // Start with very low slope
+        // Start at max range and work inward to find edge of coverage
+        double coverage_dist = range_m;
 
-          while (current_dist < range_m) {
-            current_dist += step_size;
-            if (current_dist > range_m)
-              current_dist = range_m;
+        // Search for coverage boundary using binary search-like approach
+        double min_dist = 0.0;
+        double max_dist = range_m;
+        const int search_steps = 20; // Precision of coverage boundary
 
-            double t_lat, t_lon;
-            geo::destination_point(s_lat, s_lon, current_dist, angle, t_lat,
-                                   t_lon);
+        for (int step = 0; step < search_steps; ++step) {
+          double test_dist = (min_dist + max_dist) / 2.0;
+          if (test_dist < 10.0)
+            break; // Minimum distance
 
+          double t_lat, t_lon;
+          geo::destination_point(s_lat, s_lon, test_dist, angle, t_lat, t_lon);
+
+          // Calculate Free-Space Path Loss (FSPL)
+          // FSPL(dB) = 20*log10(d_km) + 20*log10(f_MHz) + 32.44
+          double d_km = test_dist / 1000.0;
+          double fspl_db = 20.0 * std::log10(d_km) +
+                           20.0 * std::log10(frequency_mhz) + 32.44;
+
+          // Calculate terrain attenuation
+          double terrain_loss_db = 0.0;
+          if (has_elevation) {
             float target_h;
             if (elevation_service.get_elevation(t_lat, t_lon, target_h)) {
-              double slope = (target_h - sensor_h) / current_dist;
-              if (slope > max_slope) {
-                // Visible
-                max_slope = slope;
-              } else {
-                // Occluded
-                visible_dist = current_dist - step_size;
-                if (visible_dist < 0)
-                  visible_dist = 0;
-                break;
+              // Check line-of-sight obstruction
+              const double step_size = 50.0;
+              double current_dist = 0.0;
+              double max_slope = -1000.0;
+              double penetration_depth = 0.0;
+
+              while (current_dist < test_dist) {
+                current_dist += step_size;
+                if (current_dist > test_dist)
+                  current_dist = test_dist;
+
+                double check_lat, check_lon;
+                geo::destination_point(s_lat, s_lon, current_dist, angle,
+                                       check_lat, check_lon);
+
+                float check_h;
+                if (elevation_service.get_elevation(check_lat, check_lon,
+                                                    check_h)) {
+                  // Calculate expected height on LOS path
+                  double progress = current_dist / test_dist;
+                  double expected_h =
+                      sensor_h + (target_h - sensor_h) * progress;
+
+                  // Check for terrain obstruction
+                  if (check_h > expected_h) {
+                    penetration_depth += (check_h - expected_h);
+                  }
+                }
+
+                if (current_dist >= test_dist)
+                  break;
               }
+
+              // Simplified terrain loss: ~10 dB per meter of penetration
+              // (This is a conservative estimate; adjust based on
+              // terrain/frequency)
+              terrain_loss_db = penetration_depth * 10.0;
             }
-            if (current_dist >= range_m)
-              break;
+          }
+
+          // Calculate received power
+          // P_rx = P_tx + G_tx + G_rx - FSPL - Terrain_Loss
+          double p_rx_dbm = tx_power_dbm + tx_gain_dbi + rx_gain_dbi - fspl_db -
+                            terrain_loss_db;
+
+          // Check if signal is above sensitivity threshold
+          if (p_rx_dbm >= rx_sensitivity_dbm) {
+            // Signal is receivable, try further out
+            min_dist = test_dist;
+          } else {
+            // Signal too weak, try closer
+            max_dist = test_dist;
           }
         }
 
-        double p_lat, p_lon;
-        geo::destination_point(s_lat, s_lon, visible_dist, angle, p_lat, p_lon);
+        coverage_dist = min_dist;
 
-        // Add to cache (Lat/Lon)
+        double p_lat, p_lon;
+        geo::destination_point(s_lat, s_lon, coverage_dist, angle, p_lat,
+                               p_lon);
+
+        // Calculate signal strength at this edge point for caching
+        using geo::PI;
+        double lat1_rad = s_lat * PI / 180.0;
+        double lat2_rad = p_lat * PI / 180.0;
+        double delta_lat = (p_lat - s_lat) * PI / 180.0;
+        double delta_lon = (p_lon - s_lon) * PI / 180.0;
+
+        double haversine_a =
+            std::sin(delta_lat / 2.0) * std::sin(delta_lat / 2.0) +
+            std::cos(lat1_rad) * std::cos(lat2_rad) *
+                std::sin(delta_lon / 2.0) * std::sin(delta_lon / 2.0);
+        double c = 2.0 * std::atan2(std::sqrt(haversine_a),
+                                    std::sqrt(1.0 - haversine_a));
+        double dist_m = geo::EARTH_RADIUS * c;
+        if (dist_m < 1.0)
+          dist_m = 1.0;
+
+        double d_km = dist_m / 1000.0;
+        double fspl_db =
+            20.0 * std::log10(d_km) + 20.0 * std::log10(frequency_mhz) + 32.44;
+
+        // Quick terrain loss (simplified for edge points)
+        double terrain_loss_db = 0.0;
+        if (has_elevation && coverage_dist < range_m * 0.9) {
+          // Only calculate terrain loss for significantly occluded points
+          float edge_h;
+          if (elevation_service.get_elevation(p_lat, p_lon, edge_h)) {
+            if (edge_h > sensor_h + 10.0) {
+              terrain_loss_db =
+                  (edge_h - sensor_h) * 5.0; // Simplified estimate
+            }
+          }
+        }
+
+        double p_rx_dbm = tx_power_dbm + tx_gain_dbi + rx_gain_dbi - fspl_db -
+                          terrain_loss_db;
+
+        // Add to cache (Lat/Lon and Signal Strength)
         new_cache_latlons.push_back(ImVec2((float)p_lat, (float)p_lon));
+        new_cache_signal_dbm.push_back(p_rx_dbm);
 
         // Convert to Screen for drawing now
         double p_wx, p_wy;
@@ -395,7 +492,8 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors,
       }
 
       // Update Cache
-      m_view_cache[s_id] = {current_hash, new_cache_latlons};
+      m_view_cache[s_id] = {current_hash, new_cache_latlons,
+                            new_cache_signal_dbm};
     }
 
     // Colors
@@ -420,12 +518,61 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors,
     float cy = static_cast<float>((c_wy - center_wy) * world_size_pixels +
                                   screen_center.y);
 
-    // Draw Fill (Triangle Fan for star-shaped non-convex polygon)
+    // Draw Gradient Fill (RF Signal Strength Heat Map)
+    // Green (strong) → Yellow (moderate) → Red (weak signal)
     if (!points.empty()) {
       ImVec2 center_pt = ImVec2(cx, cy);
+
+      // Center color: Bright Green (excellent signal)
+      ImU32 center_col =
+          is_selected ? IM_COL32(0, 255, 0, 220) : IM_COL32(0, 220, 0, 180);
+
+      // Helper lambda to convert cached dBm to color
+      auto dbm_to_color = [](double p_rx_dbm) -> ImU32 {
+        int r, g, b, a;
+        if (p_rx_dbm >= -60.0) {
+          r = 0;
+          g = 255;
+          b = 0;
+          a = 200;
+        } else if (p_rx_dbm >= -80.0) {
+          float t = (p_rx_dbm + 80.0) / 20.0;
+          r = static_cast<int>((1.0f - t) * 255);
+          g = 255;
+          b = 0;
+          a = 180;
+        } else if (p_rx_dbm >= -100.0) {
+          float t = (p_rx_dbm + 100.0) / 20.0;
+          r = 255;
+          g = static_cast<int>(t * 255);
+          b = 0;
+          a = 120;
+        } else {
+          float t = std::max(0.0, (p_rx_dbm + 120.0) / 20.0);
+          r = 255;
+          g = 0;
+          b = 0;
+          a = static_cast<int>(t * 80);
+        }
+        return IM_COL32(r, g, b, a);
+      };
+
+      // Draw each triangle using cached signal strength
+      const ImVec2 uv = ImGui::GetFontTexUvWhitePixel();
+      auto &cached_signal = m_view_cache[s_id].signal_dbm;
+
       for (size_t i = 0; i < points.size(); ++i) {
-        draw_list->AddTriangleFilled(center_pt, points[i],
-                                     points[(i + 1) % points.size()], fill_col);
+        // Use cached signal strength values - NO recalculation!
+        ImU32 edge_col1 = dbm_to_color(cached_signal[i]);
+        ImU32 edge_col2 = dbm_to_color(cached_signal[(i + 1) % points.size()]);
+
+        draw_list->PrimReserve(3, 3);
+        draw_list->PrimWriteVtx(center_pt, uv, center_col);
+        draw_list->PrimWriteVtx(points[i], uv, edge_col1);
+        draw_list->PrimWriteVtx(points[(i + 1) % points.size()], uv, edge_col2);
+        draw_list->PrimWriteIdx((ImDrawIdx)(draw_list->_VtxCurrentIdx - 3));
+        draw_list->PrimWriteIdx((ImDrawIdx)(draw_list->_VtxCurrentIdx - 2));
+        draw_list->PrimWriteIdx((ImDrawIdx)(draw_list->_VtxCurrentIdx - 1));
       }
     }
 
