@@ -225,6 +225,30 @@ auto building_service_t::has_buildings_for_area(double min_lat, double max_lat,
   return it != m_impl->loaded_areas.end() && it->second;
 }
 
+auto building_service_t::get_buildings_in_area(double min_lat, double max_lat,
+                                               double min_lon,
+                                               double max_lon) const
+    -> std::vector<const building_t *> {
+  std::vector<const building_t *> result;
+
+  // Ideally use a spatial index (R-Tree / QuadTree).
+  // For now, linear scan is acceptable given < 10k buildings usually.
+  for (const auto &building : m_impl->buildings) {
+    if (building.footprint.empty())
+      continue;
+
+    // Check if building's first point is in bounds (simplified check)
+    // A better check would use the building's bounding box.
+    const auto &pt = building.footprint[0];
+    if (pt.lat >= min_lat && pt.lat <= max_lat && pt.lon >= min_lon &&
+        pt.lon <= max_lon) {
+      result.push_back(&building);
+    }
+  }
+
+  return result;
+}
+
 auto building_service_t::is_area_loaded(double lat, double lon) const -> bool {
   // Check if this point falls within any loaded area keys
   // Note: This is an approximation since we store keys as strings.

@@ -270,6 +270,7 @@ void render_ui(map_widget_t &map, std::vector<sensor_t> &sensors,
   if (ImGui::Begin("Map View")) {
     // RF Gradient Toggle
     ImGui::Checkbox("Show RF Signal Gradient", &map.m_show_rf_gradient);
+    ImGui::Checkbox("Show 3D Buildings", &map.m_show_buildings);
 
     map.draw(sensors, selected_index, elevation_service,
              [&](double lat, double lon) {

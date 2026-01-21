@@ -45,6 +45,11 @@ public:
   auto has_buildings_for_area(double min_lat, double max_lat, double min_lon,
                               double max_lon) const -> bool;
 
+  // Get all buildings within a bounding box
+  auto get_buildings_in_area(double min_lat, double max_lat, double min_lon,
+                             double max_lon) const
+      -> std::vector<const building_t *>;
+
   // Get buildings intersecting a ray path
   auto get_buildings_on_path(geo_point_t start, geo_point_t end) const
       -> std::vector<building_intersection_t>;

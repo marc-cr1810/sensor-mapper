@@ -320,6 +320,136 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors,
     }
   }
 
+  // --- Draw Buildings ---
+  if (m_show_buildings && m_building_service) {
+    // Determine visible area
+    double min_lat, max_lat, min_lon, max_lon;
+    geo::world_to_lat_lon(min_wx, min_wy, max_lat,
+                          min_lon); // Y is inverted in world coords usually?
+    // wait, world_to_lat_lon(0,0) -> lat, lon.
+    // world Y 0 is Top (Max Lat?), Y 1 is Bottom (Min Lat?) -> Mercator.
+    // Let's just convert all corners.
+    double lat1, lon1, lat2, lon2;
+    geo::world_to_lat_lon(min_wx, min_wy, lat1, lon1);
+    geo::world_to_lat_lon(max_wx, max_wy, lat2, lon2);
+    min_lat = std::min(lat1, lat2);
+    max_lat = std::max(lat1, lat2);
+    min_lon = std::min(lon1, lon2);
+    max_lon = std::max(lon1, lon2);
+
+    // Fetch buildings if not loaded/ensure data is available
+    // For now, we rely on the manual "fetch" or existing fetches.
+    // TODO: Trigger fetch if needed?
+    // We can use fetch_buildings_near(center) if we want to be proactive.
+
+    auto buildings = m_building_service->get_buildings_in_area(
+        min_lat, max_lat, min_lon, max_lon);
+
+    for (const auto *building : buildings) {
+      if (!building || building->footprint.empty())
+        continue;
+
+      // Draw footprint
+      std::vector<ImVec2> screen_points;
+      screen_points.reserve(building->footprint.size());
+
+      for (const auto &pt : building->footprint) {
+        double wx, wy;
+        geo::lat_lon_to_world(pt.lat, pt.lon, wx, wy);
+
+        // Wrap/Clamp adjustments relative to center
+        if (wx - center_wx > 0.5)
+          wx -= 1.0;
+        if (wx - center_wx < -0.5)
+          wx += 1.0;
+
+        float px = static_cast<float>((wx - center_wx) * world_size_pixels +
+                                      screen_center.x);
+        float py = static_cast<float>((wy - center_wy) * world_size_pixels +
+                                      screen_center.y);
+        screen_points.push_back(ImVec2(px, py));
+      }
+
+      if (screen_points.size() >= 3) {
+        // Draw simple filled polygon
+        draw_list->AddConvexPolyFilled(screen_points.data(),
+                                       screen_points.size(),
+                                       IM_COL32(100, 100, 100, 150));
+        draw_list->AddPolyline(screen_points.data(), screen_points.size(),
+                               IM_COL32(200, 200, 200, 255), true, 1.0f);
+
+        // "3D" Extrusion (fake perspective)
+        // If we want 3D, we need to project "up".
+        // In top-down 2D map, "up" is towards the camera.
+        // A simple way to visualize height is to offset the "roof" based on the
+        // vector from map center to building center (creating a vanishing point
+        // effect), OR just purely based on a fixed "up" vector (isometric-ish).
+        // Let's try a simple "perspective" offset from the center of the screen
+        // to simulate 3D.
+
+        // Calculate building center screen pos
+        ImVec2 b_center = screen_points[0];
+
+        // Perspective factor: further from center = more tilt.
+        // But height_m needs to be converted to pixels.
+        // 1 meter in pixels approx?
+        // Earth circum ~ 40Mm. World size = 256 * 2^zoom.
+        // pixels_per_meter = world_size_pixels / (40075000.0 * cos(lat))
+        double meters_per_pixel =
+            (40075000.0 * std::cos(m_center_lat * 3.14159 / 180.0)) /
+            world_size_pixels;
+        float height_px =
+            static_cast<float>(building->height_m / meters_per_pixel);
+
+        // Vanishing point is screen_center.
+        // Roof points = Base points + (Base points - screen_center) *
+        // scale_factor? Actually, just moving "up" in Y makes it look like we
+        // are looking from South? Let's do a "radial" displacement for a
+        // top-down perspective view.
+
+        std::vector<ImVec2> roof_points;
+        roof_points.reserve(screen_points.size());
+
+        for (const auto &p : screen_points) {
+          ImVec2 dir = ImVec2(p.x - screen_center.x, p.y - screen_center.y);
+          // Limit dir length to avoid exploding infinity
+          // Just use a fixed "view angle" simulation.
+          // Let's simply offset Y by height_px (isometric view from slightly
+          // below/South) roof_points.push_back(ImVec2(p.x, p.y - height_px));
+          // // Isometric-ish
+
+          // Radial displacement (Fish-eye / True Top-down perspective)
+          // If we are looking straight down at the center, things at the edges
+          // lean out. offset = dir * (height / camera_height_simulation) Assume
+          // camera is at some height? Let's try simple Y offset for now to be
+          // safe and clear.
+          roof_points.push_back(ImVec2(p.x, p.y - height_px));
+        }
+
+        // Draw Roof
+        draw_list->AddConvexPolyFilled(roof_points.data(), roof_points.size(),
+                                       IM_COL32(140, 140, 140, 200));
+        draw_list->AddPolyline(roof_points.data(), roof_points.size(),
+                               IM_COL32(220, 220, 220, 255), true, 1.0f);
+
+        // Draw Walls (connect base to roof)
+        for (size_t i = 0; i < screen_points.size(); ++i) {
+          size_t next = (i + 1) % screen_points.size();
+          ImVec2 p1 = screen_points[i];
+          ImVec2 p2 = screen_points[next];
+          ImVec2 r1 = roof_points[i];
+          ImVec2 r2 = roof_points[next];
+
+          // Draw quad
+          ImVec2 quad[4] = {p1, p2, r2, r1};
+          draw_list->AddConvexPolyFilled(quad, 4, IM_COL32(80, 80, 80, 180));
+          // draw_list->AddPolyline(quad, 4, IM_COL32(100, 100, 100, 255),
+          // true, 1.0f);
+        }
+      }
+    }
+  }
+
   // --- Draw All Sensors ---
   for (size_t idx = 0; idx < sensors.size(); ++idx) {
     const auto &sensor = sensors[idx];
@@ -348,9 +478,10 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors,
 
     // --- Caching Logic ---
     // Create a unique hash key for the current state of the sensor view
-    std::string current_hash = std::format(
-        "{:.6f}_{:.6f}_{:.1f}_{:.1f}_{}", s_lat, s_lon, range_m,
-        (double)sensor_h, has_elevation); // sensor_h includes mast + ground
+    std::string current_hash =
+        std::format("{:.6f}_{:.6f}_{:.1f}_{:.1f}_{}", s_lat, s_lon, range_m,
+                    (double)sensor_h,
+                    has_elevation); // sensor_h includes mast + ground
 
     // Check Cache
     bool cache_valid = false;
