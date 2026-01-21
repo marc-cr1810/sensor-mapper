@@ -37,8 +37,10 @@ auto map_widget_t::set_zoom(double zoom) -> void {
 auto map_widget_t::set_map_source(int source_index) -> void {
   if (source_index == 0) {
     m_tile_service->set_source(tile_service_t::tile_source_t::OSM);
-  } else {
+  } else if (source_index == 1) {
     m_tile_service->set_source(tile_service_t::tile_source_t::TERRARIUM);
+  } else {
+    m_tile_service->set_source(tile_service_t::tile_source_t::SATELLITE);
   }
 }
 
@@ -85,7 +87,7 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors,
   ImGui::SameLine();
   static int current_source = 0;
   if (ImGui::Combo("Map Source", &current_source,
-                   "OpenStreetMap\0Terrain Heightmap\0")) {
+                   "OpenStreetMap\0Terrain Heightmap\0Satellite (Esri)\0")) {
     set_map_source(current_source);
   }
 

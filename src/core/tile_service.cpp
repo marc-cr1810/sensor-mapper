@@ -47,11 +47,17 @@ auto tile_service_t::get_tile(int z, int x, int y)
   std::string url;
   if (m_source == tile_source_t::OSM) {
     url = std::format("https://tile.openstreetmap.org/{}/{}/{}.png", z, x, y);
-  } else {
+  } else if (m_source == tile_source_t::TERRARIUM) {
     // AWS Terrain Tiles (Mapzen Terrarium)
     url = std::format("https://s3.amazonaws.com/elevation-tiles-prod/"
                       "terrarium/{}/{}/{}.png",
                       z, x, y);
+  } else {
+    // Esri World Imagery (Satellite)
+    // Note: ArcGIS REST services typically use .../tile/{z}/{y}/{x}
+    url = std::format("https://server.arcgisonline.com/ArcGIS/rest/services/"
+                      "World_Imagery/MapServer/tile/{}/{}/{}",
+                      z, y, x);
   }
 
   m_pending.push_back({z, x, y, std::async(std::launch::async, [url]() {

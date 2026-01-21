@@ -13,7 +13,7 @@ using tile_key_t = std::string;
 
 class tile_service_t {
 public:
-  enum class tile_source_t { OSM, TERRARIUM };
+  enum class tile_source_t { OSM, TERRARIUM, SATELLITE };
 
   tile_service_t();
   ~tile_service_t();
