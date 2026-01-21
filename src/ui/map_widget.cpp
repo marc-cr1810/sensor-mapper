@@ -31,7 +31,10 @@ auto map_widget_t::set_zoom(double zoom) -> void {
 
 auto map_widget_t::get_zoom() const -> double { return m_zoom; }
 
-auto map_widget_t::draw(const sensor_t &sensor) -> void {
+auto map_widget_t::draw(const std::vector<sensor_t> &sensors,
+                        int selected_index,
+                        std::function<void(double, double)> on_add_sensor)
+    -> void {
   // Update async tasks
   update();
 
@@ -75,6 +78,22 @@ auto map_widget_t::draw(const sensor_t &sensor) -> void {
   const double tile_size = 256.0;
   double n = std::pow(2.0, m_zoom);
   double world_size_pixels = n * tile_size;
+
+  // Context Menu State
+  static double ctx_lat = 0.0;
+  static double ctx_lon = 0.0;
+
+  // Right Click to Open Context Menu
+  if (is_hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right)) {
+    ImVec2 mouse_pos = io.MousePos;
+    double mx = center_wx + (mouse_pos.x - (canvas_p0.x + canvas_sz.x * 0.5f)) /
+                                world_size_pixels;
+    double my = center_wy + (mouse_pos.y - (canvas_p0.y + canvas_sz.y * 0.5f)) /
+                                world_size_pixels;
+
+    geo::world_to_lat_lon(mx, my, ctx_lat, ctx_lon);
+    ImGui::OpenPopup("map_context_menu");
+  }
 
   // Mouse Wheel Zoom
   if (is_hovered && io.MouseWheel != 0.0f) {
@@ -205,12 +224,16 @@ auto map_widget_t::draw(const sensor_t &sensor) -> void {
     }
   }
 
-  // --- Draw Sensor Range ---
-  {
+  // --- Draw All Sensors ---
+  for (size_t idx = 0; idx < sensors.size(); ++idx) {
+    const auto &sensor = sensors[idx];
+    bool is_selected = (static_cast<int>(idx) == selected_index);
+
     double s_lat = sensor.get_latitude();
     double s_lon = sensor.get_longitude();
     double range_m = sensor.get_range();
 
+    // Calculate approximation in degrees
     constexpr double METERS_PER_DEG_LAT = 111132.0;
     double meters_per_deg_lon = 111132.0 * std::cos(s_lat * geo::PI / 180.0);
     if (meters_per_deg_lon < 1.0)
@@ -234,6 +257,7 @@ auto map_widget_t::draw(const sensor_t &sensor) -> void {
       double p_wx, p_wy;
       geo::lat_lon_to_world(p_lat, p_lon, p_wx, p_wy);
 
+      // Simple Wrap check logic for drawing
       if (p_wx - center_wx > 0.5)
         p_wx -= 1.0;
       if (p_wx - center_wx < -0.5)
@@ -247,11 +271,18 @@ auto map_widget_t::draw(const sensor_t &sensor) -> void {
       points.push_back(ImVec2(px, py));
     }
 
-    draw_list->AddConvexPolyFilled(points.data(), segments,
-                                   IM_COL32(0, 255, 0, 70));
-    draw_list->AddPolyline(points.data(), segments, IM_COL32(0, 255, 0, 255),
-                           true, 2.0f);
+    // Colors
+    ImU32 fill_col =
+        is_selected ? IM_COL32(0, 255, 0, 100) : IM_COL32(0, 200, 0, 50);
+    ImU32 border_col =
+        is_selected ? IM_COL32(255, 255, 0, 255) : IM_COL32(0, 255, 0, 255);
+    float thickness = is_selected ? 3.0f : 2.0f;
 
+    draw_list->AddConvexPolyFilled(points.data(), segments, fill_col);
+    draw_list->AddPolyline(points.data(), segments, border_col, true,
+                           thickness);
+
+    // Draw center marker
     double c_wx, c_wy;
     geo::lat_lon_to_world(s_lat, s_lon, c_wx, c_wy);
     if (c_wx - center_wx > 0.5)
@@ -265,6 +296,22 @@ auto map_widget_t::draw(const sensor_t &sensor) -> void {
                                   screen_center.y);
 
     draw_list->AddCircleFilled(ImVec2(cx, cy), 5.0f, IM_COL32(255, 0, 0, 255));
+    if (is_selected) {
+      draw_list->AddCircle(ImVec2(cx, cy), 8.0f, IM_COL32(255, 255, 0, 255), 0,
+                           2.0f);
+    }
+  }
+
+  // Draw Context Menu if Open
+  if (ImGui::BeginPopup("map_context_menu")) {
+    ImGui::Text("Location: %.4f, %.4f", ctx_lat, ctx_lon);
+    ImGui::Separator();
+    if (ImGui::Selectable("Add Sensor Here")) {
+      if (on_add_sensor) {
+        on_add_sensor(ctx_lat, ctx_lon);
+      }
+    }
+    ImGui::EndPopup();
   }
 
   draw_list->PopClipRect();

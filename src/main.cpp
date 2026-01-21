@@ -3,13 +3,15 @@
 #include "imgui_impl_opengl3.h"
 #include <GLFW/glfw3.h>
 #include <stdio.h>
+#include <vector>
 
 #include "core/sensor.hpp"
 #include "ui/map_widget.hpp"
 
 // Forward declaration
 namespace sensor_mapper {
-void render_ui(map_widget_t &map, sensor_t &sensor);
+void render_ui(map_widget_t &map, std::vector<sensor_t> &sensors,
+               int &selected_index);
 }
 
 // Main code
@@ -52,7 +54,9 @@ int main(int, char **) {
 
   // Application State
   sensor_mapper::map_widget_t map_widget;
-  sensor_mapper::sensor_t main_sensor("Primary Sensor", 0.0, 0.0, 100.0);
+  std::vector<sensor_mapper::sensor_t> sensors;
+  sensors.emplace_back("Primary Sensor", -33.8688, 151.2093, 5000.0);
+  int selected_sensor_index = 0;
 
   // Main loop
   while (!glfwWindowShouldClose(window)) {
@@ -65,7 +69,7 @@ int main(int, char **) {
     ImGui::NewFrame();
 
     // Core UI Logic
-    sensor_mapper::render_ui(map_widget, main_sensor);
+    sensor_mapper::render_ui(map_widget, sensors, selected_sensor_index);
 
     // Rendering
     ImGui::Render();
@@ -91,37 +95,87 @@ int main(int, char **) {
 }
 
 namespace sensor_mapper {
-void render_ui(map_widget_t &map, sensor_t &sensor) {
+void render_ui(map_widget_t &map, std::vector<sensor_t> &sensors,
+               int &selected_index) {
   // Dockspace
   ImGui::DockSpaceOverViewport(0, ImGui::GetMainViewport());
 
   if (ImGui::Begin("Sensor Configuration")) {
-    // Sensor Controls
-    char name_buffer[128];
-    snprintf(name_buffer, sizeof(name_buffer), "%s", sensor.get_name().c_str());
-    if (ImGui::InputText("Name", name_buffer, sizeof(name_buffer))) {
-      sensor.set_name(std::string(name_buffer));
+
+    // Management Buttons
+    if (ImGui::Button("Add Sensor")) {
+      sensors.emplace_back("New Sensor", -33.8688, 151.2093, 1000.0);
+      selected_index = static_cast<int>(sensors.size()) - 1;
+    }
+    ImGui::SameLine();
+    bool delete_pressed = ImGui::Button("Delete Sensor");
+
+    // List Box
+    if (ImGui::BeginListBox(
+            "##sensorlist",
+            ImVec2(-FLT_MIN, 5 * ImGui::GetTextLineHeightWithSpacing()))) {
+      for (int i = 0; i < static_cast<int>(sensors.size()); i++) {
+        ImGui::PushID(i);
+        const bool is_selected = (selected_index == i);
+        if (ImGui::Selectable(sensors[i].get_name().c_str(), is_selected))
+          selected_index = i;
+
+        // Set the initial focus when opening the combo (scrolling + keyboard
+        // navigation focus)
+        if (is_selected)
+          ImGui::SetItemDefaultFocus();
+        ImGui::PopID();
+      }
+      ImGui::EndListBox();
     }
 
-    double lat = sensor.get_latitude();
-    if (ImGui::InputDouble("Latitude", &lat)) {
-      sensor.set_latitude(lat);
+    if (delete_pressed && selected_index >= 0 &&
+        selected_index < sensors.size()) {
+      sensors.erase(sensors.begin() + selected_index);
+      if (selected_index >= sensors.size())
+        selected_index = static_cast<int>(sensors.size()) - 1;
     }
 
-    double lon = sensor.get_longitude();
-    if (ImGui::InputDouble("Longitude", &lon)) {
-      sensor.set_longitude(lon);
-    }
+    ImGui::Separator();
 
-    double range = sensor.get_range();
-    if (ImGui::InputDouble("Range (m)", &range)) {
-      sensor.set_range(range);
+    // Selected Sensor Properties
+    if (selected_index >= 0 && selected_index < sensors.size()) {
+      sensor_t &sensor = sensors[selected_index];
+      ImGui::Text("Editing: %s", sensor.get_name().c_str());
+
+      char name_buffer[128];
+      snprintf(name_buffer, sizeof(name_buffer), "%s",
+               sensor.get_name().c_str());
+      if (ImGui::InputText("Name", name_buffer, sizeof(name_buffer))) {
+        sensor.set_name(std::string(name_buffer));
+      }
+
+      double lat = sensor.get_latitude();
+      if (ImGui::InputDouble("Latitude", &lat)) {
+        sensor.set_latitude(lat);
+      }
+
+      double lon = sensor.get_longitude();
+      if (ImGui::InputDouble("Longitude", &lon)) {
+        sensor.set_longitude(lon);
+      }
+
+      double range = sensor.get_range();
+      if (ImGui::InputDouble("Range (m)", &range)) {
+        sensor.set_range(range);
+      }
+    } else {
+      ImGui::Text("No sensor selected.");
     }
   }
   ImGui::End();
 
   if (ImGui::Begin("Map View")) {
-    map.draw(sensor);
+    map.draw(sensors, selected_index, [&](double lat, double lon) {
+      // Callback for adding sensor from map
+      sensors.emplace_back("New Sensor", lat, lon, 2000.0);
+      selected_index = static_cast<int>(sensors.size()) - 1;
+    });
   }
   ImGui::End();
 }
