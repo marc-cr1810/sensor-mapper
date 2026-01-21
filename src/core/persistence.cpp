@@ -13,7 +13,8 @@ auto save_sensors(const std::string &filename,
   json j;
   for (const auto &sensor : sensors) {
     auto color = sensor.get_color();
-    j.push_back({{"name", sensor.get_name()},
+    j.push_back({{"id", sensor.get_id()},
+                 {"name", sensor.get_name()},
                  {"latitude", sensor.get_latitude()},
                  {"longitude", sensor.get_longitude()},
                  {"range", sensor.get_range()},
@@ -65,6 +66,9 @@ auto load_sensors(const std::string &filename, std::vector<sensor_t> &sensors)
 
     // Create sensor
     sensors.emplace_back(name, lat, lon, range);
+    if (item.contains("id")) {
+      sensors.back().set_id(item.value("id", ""));
+    }
     sensors.back().set_mast_height(mast_height);
     sensors.back().set_ground_elevation(ground_elevation);
     sensors.back().set_use_auto_elevation(use_auto_elevation);

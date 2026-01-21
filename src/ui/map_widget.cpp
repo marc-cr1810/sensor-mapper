@@ -1,6 +1,7 @@
 #include "ui/map_widget.hpp"
 #include "core/geo_math.hpp"
 #include <cmath>
+#include <format>
 #include <string>
 #include <vector>
 
@@ -267,75 +268,134 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors,
     // Add mast height
     sensor_h += static_cast<float>(sensor.get_mast_height());
 
-    const int segments = 360; // 1 degree precision
+    // --- Caching Logic ---
+    // Create a unique hash key for the current state of the sensor view
+    std::string current_hash = std::format(
+        "{:.6f}_{:.6f}_{:.1f}_{:.1f}_{}", s_lat, s_lon, range_m,
+        (double)sensor_h, has_elevation); // sensor_h includes mast + ground
+
+    // Check Cache
+    bool cache_valid = false;
+    const std::string &s_id = sensor.get_id();
+    auto cache_it = m_view_cache.find(s_id);
+
+    // Prepare points vector
     std::vector<ImVec2> points;
-    points.reserve(segments);
 
-    for (int i = 0; i < segments; ++i) {
-      double angle = (360.0 / segments) * i;
-      double visible_dist = range_m;
+    // Note: We need world-space points later for drawing, but the cache should
+    // store relative or world? The drawing logic converts lat/lon to world to
+    // screen. Screen depends on Zoom/Center. So we should cache the relative
+    // world-space offsets or just re-calculate screen pos from fixed Lat/Lon
+    // points. The previous raycasting code calculated 'points' directly as
+    // Screen Coordinates (px, py). Screen coords change when you Pan/Zoom. So
+    // we CANNOT cache screen coords if we Pan/Zoom. We MUST cache the resulting
+    // polygon vertices in Lat/Lon (or World Space). Let's modify the loop to
+    // generate Lat/Lon points, then a second pass to convert to Screen.
 
-      // Raycast if we have elevation data
-      if (has_elevation) {
-        const double step_size = 50.0; // Check every 50m
-        double current_dist = 0.0;
-        double max_slope = -1000.0; // Start with very low slope
+    if (cache_it != m_view_cache.end() &&
+        cache_it->second.hash_key == current_hash) {
+      // Cache Hit!
+      // We still need to convert the cached Screen Points? No, cache should
+      // store Lat/Lon. Wait, the previous code pushed `ImVec2(px, py)`
+      // directly. I need to refactor the raycast loop to produce a list of
+      // Lat/Lon first.
 
-        while (current_dist < range_m) {
-          current_dist += step_size;
-          if (current_dist > range_m)
-            current_dist = range_m;
+      // Actually, let's store the polygon as a list of "Destination Lat/Lon".
+      // Use the existing cache structure: std::vector<ImVec2> where x=lat,
+      // y=lon.
+      const auto &cached_latlons = cache_it->second.points;
+      points.reserve(cached_latlons.size());
 
-          double t_lat, t_lon;
-          geo::destination_point(s_lat, s_lon, current_dist, angle, t_lat,
-                                 t_lon);
+      for (const auto &pt : cached_latlons) {
+        double p_lat = pt.x;
+        double p_lon = pt.y;
+        double p_wx, p_wy;
+        geo::lat_lon_to_world(p_lat, p_lon, p_wx, p_wy);
 
-          float target_h;
-          if (elevation_service.get_elevation(t_lat, t_lon, target_h)) {
-            double slope = (target_h - sensor_h) / current_dist;
+        // Simple Wrap check
+        if (p_wx - center_wx > 0.5)
+          p_wx -= 1.0;
+        if (p_wx - center_wx < -0.5)
+          p_wx += 1.0;
 
-            // If new point is "below" the highest slope seen so far, it is
-            // occluded Actually this logic assumes we are looking *up*.
-            // Standard LOS: if slope > max_slope, it is visible and becomes new
-            // max_slope. If slope <= max_slope, it is hidden by the previous
-            // higher point.
+        float px = static_cast<float>((p_wx - center_wx) * world_size_pixels +
+                                      screen_center.x);
+        float py = static_cast<float>((p_wy - center_wy) * world_size_pixels +
+                                      screen_center.y);
+        points.push_back(ImVec2(px, py));
+      }
+      cache_valid = true;
+    }
 
-            if (slope > max_slope) {
-              // Visible
-              max_slope = slope;
-            } else {
-              // Occluded
-              visible_dist = current_dist - step_size;
-              // Simple binary search refinement could happen here, keeping it
-              // simple
-              if (visible_dist < 0)
-                visible_dist = 0;
-              break;
+    if (!cache_valid) {
+      // Cache Miss - Recalculate
+      const int segments = 360; // 1 degree precision
+      std::vector<ImVec2> new_cache_latlons;
+      new_cache_latlons.reserve(segments);
+      points.reserve(segments);
+
+      for (int i = 0; i < segments; ++i) {
+        double angle = (360.0 / segments) * i;
+        double visible_dist = range_m;
+
+        // Raycast if we have elevation data
+        if (has_elevation) {
+          const double step_size = 50.0; // Check every 50m
+          double current_dist = 0.0;
+          double max_slope = -1000.0; // Start with very low slope
+
+          while (current_dist < range_m) {
+            current_dist += step_size;
+            if (current_dist > range_m)
+              current_dist = range_m;
+
+            double t_lat, t_lon;
+            geo::destination_point(s_lat, s_lon, current_dist, angle, t_lat,
+                                   t_lon);
+
+            float target_h;
+            if (elevation_service.get_elevation(t_lat, t_lon, target_h)) {
+              double slope = (target_h - sensor_h) / current_dist;
+              if (slope > max_slope) {
+                // Visible
+                max_slope = slope;
+              } else {
+                // Occluded
+                visible_dist = current_dist - step_size;
+                if (visible_dist < 0)
+                  visible_dist = 0;
+                break;
+              }
             }
+            if (current_dist >= range_m)
+              break;
           }
-          if (current_dist >= range_m)
-            break;
         }
+
+        double p_lat, p_lon;
+        geo::destination_point(s_lat, s_lon, visible_dist, angle, p_lat, p_lon);
+
+        // Add to cache (Lat/Lon)
+        new_cache_latlons.push_back(ImVec2((float)p_lat, (float)p_lon));
+
+        // Convert to Screen for drawing now
+        double p_wx, p_wy;
+        geo::lat_lon_to_world(p_lat, p_lon, p_wx, p_wy);
+        if (p_wx - center_wx > 0.5)
+          p_wx -= 1.0;
+        if (p_wx - center_wx < -0.5)
+          p_wx += 1.0;
+
+        float px = static_cast<float>((p_wx - center_wx) * world_size_pixels +
+                                      screen_center.x);
+        float py = static_cast<float>((p_wy - center_wy) * world_size_pixels +
+                                      screen_center.y);
+
+        points.push_back(ImVec2(px, py));
       }
 
-      double p_lat, p_lon;
-      geo::destination_point(s_lat, s_lon, visible_dist, angle, p_lat, p_lon);
-
-      double p_wx, p_wy;
-      geo::lat_lon_to_world(p_lat, p_lon, p_wx, p_wy);
-
-      // Simple Wrap check
-      if (p_wx - center_wx > 0.5)
-        p_wx -= 1.0;
-      if (p_wx - center_wx < -0.5)
-        p_wx += 1.0;
-
-      float px = static_cast<float>((p_wx - center_wx) * world_size_pixels +
-                                    screen_center.x);
-      float py = static_cast<float>((p_wy - center_wy) * world_size_pixels +
-                                    screen_center.y);
-
-      points.push_back(ImVec2(px, py));
+      // Update Cache
+      m_view_cache[s_id] = {current_hash, new_cache_latlons};
     }
 
     // Colors

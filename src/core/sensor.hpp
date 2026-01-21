@@ -35,7 +35,11 @@ public:
   auto get_color_data() -> float *;
   auto get_color() const -> std::array<float, 3>;
 
+  auto get_id() const -> const std::string &;
+  auto set_id(const std::string &id) -> void;
+
 private:
+  std::string m_id;
   std::string m_name;
   double m_latitude;
   double m_longitude;

@@ -5,6 +5,7 @@
 #include "core/tile_service.hpp"
 #include "imgui.h"
 #include <functional>
+#include <map>
 #include <memory>
 #include <vector>
 
@@ -33,6 +34,12 @@ private:
   double m_zoom; // Double for smooth zoom
 
   // Smooth zoom/pan state (placeholder for now, using direct integers)
+
+  struct cached_view_t {
+    std::string hash_key;
+    std::vector<ImVec2> points;
+  };
+  std::map<std::string, cached_view_t> m_view_cache;
 
   std::unique_ptr<tile_service_t> m_tile_service;
 };
