@@ -17,7 +17,9 @@ auto save_sensors(const std::string &filename,
                  {"latitude", sensor.get_latitude()},
                  {"longitude", sensor.get_longitude()},
                  {"range", sensor.get_range()},
-                 {"altitude", sensor.get_altitude()},
+                 {"mast_height", sensor.get_mast_height()},
+                 {"ground_elevation", sensor.get_ground_elevation()},
+                 {"use_auto_elevation", sensor.get_use_auto_elevation()},
                  {"color", {color[0], color[1], color[2]}}});
   }
 
@@ -51,11 +53,21 @@ auto load_sensors(const std::string &filename, std::vector<sensor_t> &sensors)
     double lat = item.value("latitude", 0.0);
     double lon = item.value("longitude", 0.0);
     double range = item.value("range", 1000.0);
-    double altitude = item.value("altitude", 10.0);
+
+    // Fallback for logical migration: if "altitude" exists but "mast_height"
+    // doesn't, use "altitude" as mast_height
+    double mast_height = item.contains("mast_height")
+                             ? item.value("mast_height", 10.0)
+                             : item.value("altitude", 10.0);
+
+    double ground_elevation = item.value("ground_elevation", 0.0);
+    bool use_auto_elevation = item.value("use_auto_elevation", true);
 
     // Create sensor
     sensors.emplace_back(name, lat, lon, range);
-    sensors.back().set_altitude(altitude);
+    sensors.back().set_mast_height(mast_height);
+    sensors.back().set_ground_elevation(ground_elevation);
+    sensors.back().set_use_auto_elevation(use_auto_elevation);
 
     // Restore color if present
     if (item.contains("color") && item["color"].is_array() &&

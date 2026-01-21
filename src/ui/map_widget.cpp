@@ -252,12 +252,20 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors,
 
     // Attempt to get elevation for Occlusion Casting
     float sensor_h;
-    bool has_elevation =
-        elevation_service.get_elevation(s_lat, s_lon, sensor_h);
-    // Assume mast height of sensor's altitude
-    if (has_elevation) {
-      sensor_h += static_cast<float>(sensor.get_altitude());
+    bool has_elevation = false;
+
+    if (sensor.get_use_auto_elevation()) {
+      has_elevation = elevation_service.get_elevation(s_lat, s_lon, sensor_h);
+      if (!has_elevation) {
+        sensor_h = 0.0f; // Default to sea level if no data yet
+      }
+    } else {
+      sensor_h = static_cast<float>(sensor.get_ground_elevation());
+      has_elevation = true;
     }
+
+    // Add mast height
+    sensor_h += static_cast<float>(sensor.get_mast_height());
 
     const int segments = 360; // 1 degree precision
     std::vector<ImVec2> points;

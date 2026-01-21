@@ -187,10 +187,32 @@ void render_ui(map_widget_t &map, std::vector<sensor_t> &sensors,
         sensor.set_range(range);
       }
 
-      double altitude = sensor.get_altitude();
-      if (ImGui::InputDouble("Altitude (m)", &altitude)) {
-        sensor.set_altitude(altitude);
+      double mast_height = sensor.get_mast_height();
+      if (ImGui::InputDouble("Mast Height (m) (AGL)", &mast_height)) {
+        sensor.set_mast_height(mast_height);
       }
+
+      bool use_auto = sensor.get_use_auto_elevation();
+      if (ImGui::Checkbox("Auto Terrain Altitude", &use_auto)) {
+        sensor.set_use_auto_elevation(use_auto);
+      }
+
+      double ground_elevation = sensor.get_ground_elevation();
+
+      // If Auto is enabled, try to display the actual fetched elevation
+      if (use_auto) {
+        float fetched_h;
+        if (elevation_service.get_elevation(
+                sensor.get_latitude(), sensor.get_longitude(), fetched_h)) {
+          ground_elevation = static_cast<double>(fetched_h);
+        }
+      }
+
+      ImGui::BeginDisabled(use_auto);
+      if (ImGui::InputDouble("Ground Altitude (m) (AMSL)", &ground_elevation)) {
+        sensor.set_ground_elevation(ground_elevation);
+      }
+      ImGui::EndDisabled();
 
       ImGui::ColorEdit3("Color", sensor.get_color_data());
     } else {
