@@ -238,9 +238,9 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors,
     float sensor_h;
     bool has_elevation =
         elevation_service.get_elevation(s_lat, s_lon, sensor_h);
-    // Assume mast height of 10m
+    // Assume mast height of sensor's altitude
     if (has_elevation) {
-      sensor_h += 10.0f;
+      sensor_h += static_cast<float>(sensor.get_altitude());
     }
 
     const int segments = 360; // 1 degree precision

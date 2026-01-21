@@ -187,6 +187,11 @@ void render_ui(map_widget_t &map, std::vector<sensor_t> &sensors,
         sensor.set_range(range);
       }
 
+      double altitude = sensor.get_altitude();
+      if (ImGui::InputDouble("Altitude (m)", &altitude)) {
+        sensor.set_altitude(altitude);
+      }
+
       ImGui::ColorEdit3("Color", sensor.get_color_data());
     } else {
       ImGui::Text("No sensor selected.");

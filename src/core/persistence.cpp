@@ -17,6 +17,7 @@ auto save_sensors(const std::string &filename,
                  {"latitude", sensor.get_latitude()},
                  {"longitude", sensor.get_longitude()},
                  {"range", sensor.get_range()},
+                 {"altitude", sensor.get_altitude()},
                  {"color", {color[0], color[1], color[2]}}});
   }
 
@@ -50,9 +51,11 @@ auto load_sensors(const std::string &filename, std::vector<sensor_t> &sensors)
     double lat = item.value("latitude", 0.0);
     double lon = item.value("longitude", 0.0);
     double range = item.value("range", 1000.0);
+    double altitude = item.value("altitude", 10.0);
 
     // Create sensor
     sensors.emplace_back(name, lat, lon, range);
+    sensors.back().set_altitude(altitude);
 
     // Restore color if present
     if (item.contains("color") && item["color"].is_array() &&
