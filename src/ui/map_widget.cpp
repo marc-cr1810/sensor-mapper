@@ -272,6 +272,8 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors,
     }
 
     // Colors
+    auto col = sensor.get_color();
+    // Range stays green
     ImU32 fill_col =
         is_selected ? IM_COL32(0, 255, 0, 100) : IM_COL32(0, 200, 0, 50);
     ImU32 border_col =
@@ -295,7 +297,11 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors,
     float cy = static_cast<float>((c_wy - center_wy) * world_size_pixels +
                                   screen_center.y);
 
-    draw_list->AddCircleFilled(ImVec2(cx, cy), 5.0f, IM_COL32(255, 0, 0, 255));
+    // Use solid color for marker
+    ImU32 marker_col =
+        IM_COL32(static_cast<int>(col[0] * 255), static_cast<int>(col[1] * 255),
+                 static_cast<int>(col[2] * 255), 255);
+    draw_list->AddCircleFilled(ImVec2(cx, cy), 5.0f, marker_col);
     if (is_selected) {
       draw_list->AddCircle(ImVec2(cx, cy), 8.0f, IM_COL32(255, 255, 0, 255), 0,
                            2.0f);

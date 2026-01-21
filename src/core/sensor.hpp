@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <string>
 
 namespace sensor_mapper {
@@ -22,11 +23,15 @@ public:
   auto get_range() const -> double;
   auto set_range(double range) -> void;
 
+  auto get_color_data() -> float *;
+  auto get_color() const -> std::array<float, 3>;
+
 private:
   std::string m_name;
   double m_latitude;
   double m_longitude;
   double m_range;
+  std::array<float, 3> m_color;
 };
 
 } // namespace sensor_mapper

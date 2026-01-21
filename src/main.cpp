@@ -164,6 +164,8 @@ void render_ui(map_widget_t &map, std::vector<sensor_t> &sensors,
       if (ImGui::InputDouble("Range (m)", &range)) {
         sensor.set_range(range);
       }
+
+      ImGui::ColorEdit3("Color", sensor.get_color_data());
     } else {
       ImGui::Text("No sensor selected.");
     }
