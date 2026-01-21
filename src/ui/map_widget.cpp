@@ -73,8 +73,20 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors,
   // Update async tasks
   update();
 
-  ImGui::Text("Map Center: %.4f, %.4f | Zoom: %.2f", m_center_lat, m_center_lon,
-              m_zoom);
+  // Calculate cursor altitude
+  static double cursor_alt = 0.0;
+  // Update altitude periodically or every frame?
+  // Every frame is cheap if elevation service caches well or is fast.
+  // We'll trust elevation_service is reasonably fast (it checks cache).
+  float h = 0.0f;
+  if (elevation_service.get_elevation(m_mouse_lat, m_mouse_lon, h)) {
+    cursor_alt = static_cast<double>(h);
+  } else {
+    cursor_alt = 0.0; // or last known
+  }
+
+  ImGui::Text("Cursor: %.5f, %.5f | Alt: %.1f m | Zoom: %.2f", m_mouse_lat,
+              m_mouse_lon, cursor_alt, m_zoom);
 
   // Zoom controls (Buttons)
   if (ImGui::Button("Zoom In"))
@@ -717,6 +729,46 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors,
     }
     ImGui::EndPopup();
   }
+
+  // Calculate mouse Lat/Lon
+  ImVec2 mouse_pos = ImGui::GetMousePos();
+  // Check if mouse is inside canvas
+  if (ImGui::IsWindowHovered()) {
+    double mouse_offset_x = mouse_pos.x - screen_center.x;
+    double mouse_offset_y = mouse_pos.y - screen_center.y;
+    double mouse_wx = center_wx + (mouse_offset_x / world_size_pixels);
+    double mouse_wy = center_wy + (mouse_offset_y / world_size_pixels);
+
+    // Wrap X
+    if (mouse_wx < 0.0)
+      mouse_wx = std::fmod(mouse_wx, 1.0) + 1.0;
+    if (mouse_wx > 1.0)
+      mouse_wx = std::fmod(mouse_wx, 1.0);
+
+    // Clamp Y
+    if (mouse_wy > 0.0 && mouse_wy < 1.0) {
+      geo::world_to_lat_lon(mouse_wx, mouse_wy, m_mouse_lat, m_mouse_lon);
+    }
+  }
+
+  // Draw overlay info
+  std::string info_text =
+      std::format("Cursor: {:.5f}, {:.5f}", m_mouse_lat, m_mouse_lon);
+
+  // Padding and positioning
+  float padding = 5.0f;
+  ImVec2 text_size = ImGui::CalcTextSize(info_text.c_str());
+  ImVec2 overlay_pos =
+      ImVec2(canvas_p0.x + 10, canvas_p0.y + canvas_sz.y - text_size.y - 10);
+
+  // Draw background
+  draw_list->AddRectFilled(
+      ImVec2(overlay_pos.x - padding, overlay_pos.y - padding),
+      ImVec2(overlay_pos.x + text_size.x + padding,
+             overlay_pos.y + text_size.y + padding),
+      IM_COL32(255, 255, 255, 200), 4.0f);
+
+  draw_list->AddText(overlay_pos, IM_COL32(0, 0, 0, 255), info_text.c_str());
 
   draw_list->PopClipRect();
 }

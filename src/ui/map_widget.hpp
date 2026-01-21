@@ -33,12 +33,18 @@ public:
 
   auto get_zoom() const -> double;
 
+  auto get_mouse_lat() const -> double { return m_mouse_lat; }
+  auto get_mouse_lon() const -> double { return m_mouse_lon; }
+
   bool m_show_rf_gradient; // Show RF signal strength gradient (default: off)
 
 private:
   double m_center_lat;
   double m_center_lon;
   double m_zoom; // Double for smooth zoom
+
+  double m_mouse_lat = 0.0;
+  double m_mouse_lon = 0.0;
 
   // Smooth zoom/pan state (placeholder for now, using direct integers)
 

@@ -163,7 +163,9 @@ void render_ui(map_widget_t &map, std::vector<sensor_t> &sensors,
     // Selected Sensor Properties
     if (selected_index >= 0 && selected_index < sensors.size()) {
       sensor_t &sensor = sensors[selected_index];
-      ImGui::Text("Editing: %s", sensor.get_name().c_str());
+      ImGui::Spacing();
+      ImGui::Separator();
+      ImGui::TextDisabled("PROPERTIES");
 
       char name_buffer[128];
       snprintf(name_buffer, sizeof(name_buffer), "%s",
@@ -172,32 +174,75 @@ void render_ui(map_widget_t &map, std::vector<sensor_t> &sensors,
         sensor.set_name(std::string(name_buffer));
       }
 
-      double lat = sensor.get_latitude();
-      if (ImGui::InputDouble("Latitude", &lat)) {
-        sensor.set_latitude(lat);
+      if (ImGui::Button("Focus Camera")) {
+        map.set_center(sensor.get_latitude(), sensor.get_longitude());
+        if (map.get_zoom() < 15.0)
+          map.set_zoom(16.0);
       }
 
-      double lon = sensor.get_longitude();
-      if (ImGui::InputDouble("Longitude", &lon)) {
-        sensor.set_longitude(lon);
+      if (ImGui::CollapsingHeader("Location", ImGuiTreeNodeFlags_DefaultOpen)) {
+        double lat = sensor.get_latitude();
+        if (ImGui::InputDouble("Latitude", &lat, 0.0001, 0.001, "%.6f")) {
+          sensor.set_latitude(lat);
+        }
+
+        double lon = sensor.get_longitude();
+        if (ImGui::InputDouble("Longitude", &lon, 0.0001, 0.001, "%.6f")) {
+          sensor.set_longitude(lon);
+        }
+
+        if (ImGui::Button("Snap to Building Height")) {
+          // Manual trigger
+          map.fetch_buildings_near(lat, lon);
+          double b_h = map.get_building_at_location(lat, lon);
+          if (b_h > 0) {
+            sensor.set_mast_height(b_h);
+          }
+        }
+        if (ImGui::IsItemHovered())
+          ImGui::SetTooltip("Sets mast height to building roof if available.");
       }
 
-      double range = sensor.get_range();
-      if (ImGui::InputDouble("Range (m)", &range)) {
-        sensor.set_range(range);
-      }
+      if (ImGui::CollapsingHeader("RF Parameters",
+                                  ImGuiTreeNodeFlags_DefaultOpen)) {
+        double range = sensor.get_range();
+        if (ImGui::InputDouble("Range (m)", &range, 100.0, 1000.0)) {
+          sensor.set_range(range);
+        }
 
-      double mast_height = sensor.get_mast_height();
-      if (ImGui::InputDouble("Mast Height (m) (AGL)", &mast_height)) {
-        sensor.set_mast_height(mast_height);
+        double mast_height = sensor.get_mast_height();
+        if (ImGui::InputDouble("Mast Height (m)", &mast_height, 1.0, 5.0)) {
+          sensor.set_mast_height(mast_height);
+        }
+
+        // Display effective height
+        float ground_h = 0.0f;
+        float elev = 0.0f;
+        if (elevation_service.get_elevation(sensor.get_latitude(),
+                                            sensor.get_longitude(), elev)) {
+          ground_h = elev;
+        }
+        ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f),
+                           "Ground Elevation: %.1f m", ground_h);
+        ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f),
+                           "Total Height (AMSL): %.1f m",
+                           ground_h + mast_height);
       }
 
       bool use_auto = sensor.get_use_auto_elevation();
-      if (ImGui::Checkbox("Auto Terrain Altitude", &use_auto)) {
-        sensor.set_use_auto_elevation(use_auto);
-      }
-
       double ground_elevation = sensor.get_ground_elevation();
+
+      if (ImGui::CollapsingHeader("Advanced")) {
+        if (ImGui::Checkbox("Auto Terrain Altitude", &use_auto)) {
+          sensor.set_use_auto_elevation(use_auto);
+        }
+
+        if (!use_auto) {
+          if (ImGui::InputDouble("Manual Ground Elev", &ground_elevation)) {
+            sensor.set_ground_elevation(ground_elevation);
+          }
+        }
+      }
 
       // If Auto is enabled, try to display the actual fetched elevation
       if (use_auto) {
@@ -205,13 +250,14 @@ void render_ui(map_widget_t &map, std::vector<sensor_t> &sensors,
         if (elevation_service.get_elevation(
                 sensor.get_latitude(), sensor.get_longitude(), fetched_h)) {
           ground_elevation = static_cast<double>(fetched_h);
+          // Auto-update the sensor's ground elevation too so RF model sees it
+          sensor.set_ground_elevation(ground_elevation);
         }
       }
 
-      ImGui::BeginDisabled(use_auto);
-      if (ImGui::InputDouble("Ground Altitude (m) (AMSL)", &ground_elevation)) {
-        sensor.set_ground_elevation(ground_elevation);
-      }
+      ImGui::BeginDisabled(true);
+      ImGui::InputDouble("Ground Altitude (m) (AMSL)", &ground_elevation, 0.0,
+                         0.0, "%.1f");
       ImGui::EndDisabled();
 
       ImGui::ColorEdit3("Color", sensor.get_color_data());
