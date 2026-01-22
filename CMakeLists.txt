@@ -60,9 +60,17 @@ FetchContent_MakeAvailable(cpr)
 FetchContent_Declare(
     stb
     GIT_REPOSITORY https://github.com/nothings/stb.git
-    GIT_TAG        master
+    GIT_TAG master
 )
 FetchContent_MakeAvailable(stb)
+
+# GLAD OpenGL Loader
+FetchContent_Declare(
+    glad
+    GIT_REPOSITORY https://github.com/Dav1dde/glad.git
+    GIT_TAG v0.1.36
+)
+FetchContent_MakeAvailable(glad)
 
 # nlohmann_json
 FetchContent_Declare(
@@ -103,18 +111,20 @@ set(SOURCES
 add_executable(sensor_mapper ${SOURCES})
 
 # Include Directories
-target_include_directories(sensor_mapper PRIVATE 
+target_include_directories(sensor_mapper PRIVATE
     src
     ${imgui_SOURCE_DIR}
     ${imgui_SOURCE_DIR}/backends
     ${stb_SOURCE_DIR}
+    ${glad_SOURCE_DIR}/include
 )
 
 # Link Libraries
-target_link_libraries(sensor_mapper PRIVATE 
+target_link_libraries(sensor_mapper PRIVATE
     glfw
     cpr::cpr
     nlohmann_json::nlohmann_json
+    glad
 )
 
 # ImGui Backend Files (need to be compiled)

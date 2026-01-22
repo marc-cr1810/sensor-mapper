@@ -48,14 +48,8 @@ public:
       // G(theta) = -12 * (theta / BW)^2
       // Clamped to Back-to-Front ratio
 
-      float norm_angle =
-          std::abs(angle) / (beamwidth_deg / 2.0f); // 1.0 at -3dB edge?
-      // Standard approx: -3dB at beamwidth/2
-      // -3 = coeff * (1.0)^2  => coeff = -3.
-      // Wait, standard formulas use 12dB for 2xBW?
-      // Let's use 3dB beamwidth def: at angle = beamwidth/2, gain is -3dB.
-      // dB = -3 * (angle / (bw/2))^2
-
+      // Standard 3dB beamwidth definition: at angle = beamwidth/2, gain is -3dB
+      // Formula: dB = -3 * (angle / (bw/2))^2
       float gain = -3.0f * std::pow(angle / (beamwidth_deg / 2.0f), 2.0f);
 
       // Side lobe / Back lobe floor

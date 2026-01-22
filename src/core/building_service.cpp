@@ -266,7 +266,7 @@ auto building_service_t::get_buildings_in_area(double min_lat, double max_lat,
   return result;
 }
 
-auto building_service_t::is_area_loaded(double lat, double lon) const -> bool {
+auto building_service_t::is_area_loaded(double /*lat*/, double /*lon*/) const -> bool {
   // Optimization: For now returns true if *any* building contains this point
   // or if we have processed a fetch nearby.
   return false;

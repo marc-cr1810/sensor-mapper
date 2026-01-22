@@ -1,3 +1,4 @@
+#include <glad/glad.h>
 #include "imgui.h"
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
@@ -38,6 +39,12 @@ int main(int, char **) {
     return 1;
   glfwMakeContextCurrent(window);
   glfwSwapInterval(1); // Enable vsync
+
+  // Initialize GLAD
+  if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) {
+    fprintf(stderr, "Failed to initialize GLAD\n");
+    return 1;
+  }
 
   // Setup Dear ImGui context
   IMGUI_CHECKVERSION();
@@ -152,16 +159,16 @@ void render_ui(map_widget_t &map, std::vector<sensor_t> &sensors,
     }
 
     if (delete_pressed && selected_index >= 0 &&
-        selected_index < sensors.size()) {
+        selected_index < static_cast<int>(sensors.size())) {
       sensors.erase(sensors.begin() + selected_index);
-      if (selected_index >= sensors.size())
+      if (selected_index >= static_cast<int>(sensors.size()))
         selected_index = static_cast<int>(sensors.size()) - 1;
     }
 
     ImGui::Separator();
 
     // Selected Sensor Properties
-    if (selected_index >= 0 && selected_index < sensors.size()) {
+    if (selected_index >= 0 && selected_index < static_cast<int>(sensors.size())) {
       sensor_t &sensor = sensors[selected_index];
       ImGui::Spacing();
       ImGui::Separator();

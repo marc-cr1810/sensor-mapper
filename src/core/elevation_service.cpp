@@ -56,7 +56,7 @@ auto elevation_service_t::get_elevation(double lat, double lon,
       py = TILE_SIZE - 1;
 
     int idx = py * TILE_SIZE + px;
-    if (idx < it->second->heights.size()) {
+    if (static_cast<size_t>(idx) < it->second->heights.size()) {
       out_height = it->second->heights[idx];
       return true;
     }

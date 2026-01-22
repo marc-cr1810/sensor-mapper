@@ -1,9 +1,9 @@
 #pragma once
 
-#include "core/elevation_service.hpp"
-#include "core/rf_engine.hpp" // For coverage_grid_t definition
-#include "core/sensor.hpp"
-#include "renderer/shader.hpp"
+#include "../core/elevation_service.hpp"
+#include "../core/rf_engine.hpp" // For coverage_grid_t definition
+#include "../core/sensor.hpp"
+#include "shader.hpp"
 #include <future>
 #include <memory>
 #include <vector>

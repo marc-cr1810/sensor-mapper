@@ -408,7 +408,7 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors,
         // to simulate 3D.
 
         // Calculate building center screen pos
-        ImVec2 b_center = screen_points[0];
+
 
         // Perspective factor: further from center = more tilt.
         // But height_m needs to be converted to pixels.
@@ -432,7 +432,7 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors,
         roof_points.reserve(screen_points.size());
 
         for (const auto &p : screen_points) {
-          ImVec2 dir = ImVec2(p.x - screen_center.x, p.y - screen_center.y);
+
           // Limit dir length to avoid exploding infinity
           // Just use a fixed "view angle" simulation.
           // Let's simply offset Y by height_px (isometric view from slightly
@@ -523,83 +523,18 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors,
     if (min_lon > max_lon)
       std::swap(min_lon, max_lon);
 
-    bool is_computing = m_coverage_future.valid();
-
-    // Trigger logic: If not computing, and (grid missing OR dirty), trigger
-    // Ideally only trigger when map settles.
-    if (!is_computing && (m_heatmap_dirty || !m_latest_grid)) {
-      m_coverage_future = m_rf_engine->compute_coverage(
-          sensors, &elevation_service, min_lat, max_lat, min_lon, max_lon, 256,
-          256);                // Fixed resolution for heatmap
-      m_heatmap_dirty = false; // "Clean" until result comes back
-    }
-
-    // Upload texture if dirty (new grid arrived in update())
-    if (m_latest_grid && m_heatmap_dirty) {
-      // ... Wait, we set dirty=true in update(), so we upload here.
-      std::vector<unsigned char> pixels;
-      pixels.resize(m_latest_grid->width * m_latest_grid->height * 4);
-
-      auto dbm_to_color_grid = [](double p_rx_dbm, unsigned char &r,
-                                  unsigned char &g, unsigned char &b,
-                                  unsigned char &a) {
-        if (p_rx_dbm >= -60.0) {
-          r = 0;
-          g = 255;
-          b = 0;
-          a = 200;
-        } else if (p_rx_dbm >= -80.0) {
-          float t = (float)(p_rx_dbm + 80.0) / 20.0f;
-          r = (unsigned char)((1.0f - t) * 255);
-          g = 255;
-          b = 0;
-          a = 180;
-        } else if (p_rx_dbm >= -100.0) {
-          float t = (float)(p_rx_dbm + 100.0) / 20.0f;
-          r = 255;
-          g = (unsigned char)(t * 255);
-          b = 0;
-          a = 120;
-        } else {
-          float t = std::max(0.0f, (float)(p_rx_dbm + 120.0) / 20.0f);
-          r = 255;
-          g = 0;
-          b = 0;
-          a = (unsigned char)(t * 80);
-        }
-      };
-
-      for (size_t i = 0; i < m_latest_grid->signal_dbm.size(); ++i) {
-        unsigned char r, g, b, a;
-        float val = m_latest_grid->signal_dbm[i];
-        if (val > -150.0f) {
-          dbm_to_color_grid(val, r, g, b, a);
-        } else {
-          r = 0;
-          g = 0;
-          b = 0;
-          a = 0;
-        }
-        pixels[i * 4 + 0] = r;
-        pixels[i * 4 + 1] = g;
-        pixels[i * 4 + 2] = b;
-        pixels[i * 4 + 3] = a;
-      }
-
-      glBindTexture(GL_TEXTURE_2D, m_heatmap_texture_id);
-      glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, m_latest_grid->width,
-                   m_latest_grid->height, 0, GL_RGBA, GL_UNSIGNED_BYTE,
-                   pixels.data());
+    // GPU RF Engine: Render directly to texture when dirty
+    if (m_heatmap_dirty && !sensors.empty()) {
+      m_heatmap_texture_id = m_rf_engine->render(
+          sensors, &elevation_service, min_lat, max_lat, min_lon, max_lon);
       m_heatmap_dirty = false;
     }
 
-    // Draw Texture
-    if (m_latest_grid) {
-      if (m_heatmap_texture_id != 0) {
-        draw_list->AddImage(
-            (ImTextureID)(intptr_t)m_heatmap_texture_id, canvas_p0,
+    // Draw GPU-rendered texture
+    if (m_heatmap_texture_id != 0) {
+      draw_list->AddImage(
+          (ImTextureID)(intptr_t)m_heatmap_texture_id, canvas_p0,
             ImVec2(canvas_p0.x + canvas_sz.x, canvas_p0.y + canvas_sz.y));
-      }
     }
 
     // Draw Markers Only
@@ -792,7 +727,7 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors,
                 // Check line-of-sight obstruction
                 const double step_size = 50.0;
                 double current_dist = 0.0;
-                double max_slope = -1000.0;
+
                 double penetration_depth = 0.0;
 
                 while (current_dist < test_dist) {
@@ -1001,7 +936,7 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors,
 
         if (m_show_rf_gradient && !m_view_cache[s_id].signal_dbm.empty()) {
           // RF Gradient Mode: Use cached signal strength
-          auto dbm_to_color = [](double p_rx_dbm) -> ImU32 {
+          [[maybe_unused]] auto dbm_to_color = [](double p_rx_dbm) -> ImU32 {
             int r, g, b, a;
             if (p_rx_dbm >= -60.0) {
               r = 0;

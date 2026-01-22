@@ -62,9 +62,6 @@ auto rf_engine_t::compute_coverage(const std::vector<sensor_t> &sensors,
     grid->max_lon = max_lon;
     grid->signal_dbm.resize(width * height, -200.0f); // Init to noise
 
-    const double PI = 3.14159265359;
-    const double EARTH_RADIUS = 6371000.0;
-
     for (int y = 0; y < height; ++y) {
       double t = (double)y / (height - 1);
       double cell_lat = min_lat + t * (max_lat - min_lat);
@@ -113,11 +110,6 @@ auto rf_engine_t::compute_coverage(const std::vector<sensor_t> &sensors,
             // Number of steps based on distance (e.g., every 50m)
             int steps = static_cast<int>(dist_m / 50.0);
             if (steps > 0) {
-              double s_lat_rad = sensor.get_latitude() * PI / 180.0;
-              double s_lon_rad = sensor.get_longitude() * PI / 180.0;
-              double c_lat_rad = cell_lat * PI / 180.0;
-              double c_lon_rad = cell_lon * PI / 180.0;
-
               for (int i = 1; i < steps; ++i) {
                 double t_step = (double)i / steps;
                 // Linear Interpolation of Lat/Lon (Approximation for short

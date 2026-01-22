@@ -1,19 +1,10 @@
 #include "gpu_rf_engine.hpp"
-#include "core/geo_math.hpp"
+#include "../core/geo_math.hpp"
+#include <glad/glad.h>
 #include <algorithm>
 #include <cmath>
 #include <iostream>
 #include <vector>
-
-
-// Include the shader source (we will define it later or load it)
-// For now, let's assume we load it from a string or file.
-// Simplest is to embed it here or read file.
-// Let's implement reading from file in the future, but for now hardcode/include
-// is easier for distribution? The plan said src/shaders/rf_propagation.frag. I
-// will create that file, but I need a way to read it. To keep things simple and
-// robust without file I/O runtime errors, I will embed the source here
-// temporarily OR use a raw string literal.
 
 namespace sensor_mapper {
 
@@ -28,10 +19,9 @@ void main() {
 }
 )";
 
-// Forward decl of fragment shader source (to be defined in shader file or here)
-extern const char *RF_FRAG_SHADER_SRC;
-
-gpu_rf_engine_t::gpu_rf_engine_t() { init_gl(); }
+gpu_rf_engine_t::gpu_rf_engine_t() { 
+  init_gl(); 
+}
 
 gpu_rf_engine_t::~gpu_rf_engine_t() {
   if (m_fbo)
@@ -41,7 +31,7 @@ gpu_rf_engine_t::~gpu_rf_engine_t() {
   if (m_elevation_texture)
     glDeleteTextures(1, &m_elevation_texture);
   if (m_quad_vao)
-    glDeleteVertexArrays(1, &m_quad_vao); // GL 3.0+
+    glDeleteVertexArrays(1, &m_quad_vao);
   if (m_quad_vbo)
     glDeleteBuffers(1, &m_quad_vbo);
 }
@@ -52,8 +42,6 @@ void gpu_rf_engine_t::init_gl() {
                       -1.0f, -1.0f, 0.0f, 0.0f, 1.0f,  -1.0f, 1.0f, 0.0f,
                       1.0f,  1.0f,  1.0f, 1.0f, -1.0f, 1.0f,  0.0f, 1.0f};
 
-  // We strictly need a real VAO for Core Profile, or 0 for Compatibility?
-  // Using simple approach.
   glGenVertexArrays(1, &m_quad_vao);
   glBindVertexArray(m_quad_vao);
 
@@ -110,10 +98,6 @@ void gpu_rf_engine_t::resize_fbo(int width, int height) {
 void gpu_rf_engine_t::update_elevation_texture(elevation_service_t *service,
                                                double min_lat, double max_lat,
                                                double min_lon, double max_lon) {
-  // Only update if bounds changed significantly?
-  // For simplicity, update every time for now (Cost: 256*256 cache queries =
-  // cheap).
-
   int w = 256;
   int h = 256;
 
@@ -129,13 +113,11 @@ void gpu_rf_engine_t::update_elevation_texture(elevation_service_t *service,
       float elev = 0.0f;
       if (service)
         service->get_elevation(lat, lon, elev);
-      // Ensure > 0 for sanity? No, valleys can be negative.
       data[y * w + x] = elev;
     }
   }
 
   glBindTexture(GL_TEXTURE_2D, m_elevation_texture);
-  // R32F for full float precision
   glTexImage2D(GL_TEXTURE_2D, 0, GL_R32F, w, h, 0, GL_RED, GL_FLOAT,
                data.data());
 }
@@ -147,14 +129,6 @@ auto gpu_rf_engine_t::render(const std::vector<sensor_t> &sensors,
 
   // Lazy load shader
   if (!m_shader) {
-    // Need to load source
-    // For now, I'll assume we have a way to get it.
-    // Hack: I'll include the source string via a dirty include or just expected
-    // extern. Let's rely on `src/shaders/rf_propagation.frag` being available
-    // as raw string? Actually, I'll modify `shader.cpp` to read file? Or I'll
-    // just define the shader source string HERE in this file to save IO
-    // complexity.
-
     const char *FRAG_SRC = R"(
 #version 130
 precision mediump float;
@@ -186,8 +160,6 @@ uniform vec4 u_sensor_params_1[MAX_SENSORS];  // x=pwr, y=freq, z=azi, w=beam
 uniform vec4 u_sensor_params_2[MAX_SENSORS];  // x=gain, y=mast, z=ground, w=model
 
 uniform vec2 u_bounds_meters; // Width/Height of map in meters
-uniform float u_min_elevation; // Base elevation? (Assume texture has absolute)
-// Texture is R32F, so it contains absolute meters.
 
 float get_elevation(vec2 uv) {
     return texture(u_elevation, uv).r;
@@ -198,7 +170,6 @@ float calculate_fspl(float d_km, float f_mhz) {
     return 20.0 * log(d_km)/log(10.0) + 20.0 * log(f_mhz)/log(10.0) + 32.44;
 }
 
-// Simple Hata approx for shader
 float calculate_hata(float d_km, float f_mhz, float h_tx, float h_rx) {
    if (d_km <= 0.001) return 0.0;
    float log_f = log(f_mhz)/log(10.0);
@@ -222,21 +193,12 @@ void main() {
         float s_range = u_sensor_pos_range[i].z;
         
         vec2 diff = (v_texcoord - s_uv);
-        // Correct aspect ratio for distance
-        // Dist in meters
         vec2 diff_m = diff * u_bounds_meters;
         float dist_m = length(diff_m);
-        float dist_uv = length(diff); // Approx check
+        float dist_uv = length(diff);
         
-        if (dist_uv > s_range) continue; // Circle cull (using uv range approx)
-        if (dist_m > s_range * length(u_bounds_meters)) continue; // better check? using range passed in?
-        // Let's assume s_range passed is in UV units for culling, but calculate physics in meters.
-        // Actually passing range in UV units is tricky if non-square.
-        // Let's calculate proper distance always. 
-        // We know max range in meters. s_range in uniform is likely passed as Ratio of width?
-        // Let's stick to: check dist_m vs range_m (passed in uniform?)
+        if (dist_uv > s_range) continue;
         
-        // Decoding uniform
         float tx_pwr = u_sensor_params_1[i].x;
         float freq   = u_sensor_params_1[i].y;
         float azi    = u_sensor_params_1[i].z;
@@ -246,25 +208,7 @@ void main() {
         float ground = u_sensor_params_2[i].z;
         int   model  = int(u_sensor_params_2[i].w);
         
-        // Range check (hardcoded 50km or pass it?)
-        // Let's say we ignore range uniform for physics, just calc loss.
-        
-        // Angle (bearing)
-        // atan(y, x). Remember Y is Up in UV? Map Y usually points Down? 
-        // Lat/Lon: Y is Lat (Up). 
-        // Shader: v_texcoord (0,0) is usually Bottom-Left in OpenGL.
-        // But map tile 0,0 is Top-Left. 
-        // We need to coordinate system match.
-        // Assuming update_elevation renders standard image order: 0,0 is top-left in data buffer? 
-        // glTexImage2D: data starts at bottom-left? Standard GL is bottom-up.
-        // If we supply buffer 0..N, GL reads 0 as bottom row.
-        // But our loops (y=0) imply Lat min->max or max->min?
-        // min_lat (bottom) to max_lat (top). y=0 is min_lat.
-        // So y=0 is bottom. So data buffer is Bottom-Up. 
-        // So v_texcoord.y=0 is bottom (min_lat). Correct.
-        
-        float angle_rad = atan(diff_m.x, diff_m.y); // x=lon (East), y=lat (North). atan(delta_x, delta_y) gives bearing from North (Y)?
-        // atan(x, y) results in 0 at (0,1) i.e. North. Positive X->East.
+        float angle_rad = atan(diff_m.x, diff_m.y);
         float angle_deg = degrees(angle_rad);
         if (angle_deg < 0.0) angle_deg += 360.0;
         
@@ -275,7 +219,7 @@ void main() {
         
         // LOS Check (Raymarch)
         float diffraction_loss = 0.0;
-        int steps = 25; // Fixed steps for performance
+        int steps = 25;
         float h_tx = mast + ground;
         
         for(int s=1; s<steps; ++s) {
@@ -293,7 +237,7 @@ void main() {
         float d_km = dist_m / 1000.0;
         float loss = 0.0;
         if (model == 0) loss = calculate_fspl(d_km, freq);
-        else loss = calculate_hata(d_km, freq, h_tx, 2.0); // Simple Urban
+        else loss = calculate_hata(d_km, freq, h_tx, 2.0);
         
         float rx = tx_pwr + gain - loss - pattern_loss - diffraction_loss;
         max_dbm = max(max_dbm, rx);
@@ -302,7 +246,6 @@ void main() {
     // Coloring
     vec4 col = vec4(0.0);
     if (max_dbm > -150.0) {
-        // Simple heatmap
         if (max_dbm >= -60.0) col = vec4(0.0, 1.0, 0.0, 0.8);
         else if (max_dbm >= -80.0) col = mix(vec4(1.0, 1.0, 0.0, 0.7), vec4(0.0, 1.0, 0.0, 0.8), (max_dbm+80.0)/20.0);
         else if (max_dbm >= -100.0) col = mix(vec4(1.0, 0.0, 0.0, 0.5), vec4(1.0, 1.0, 0.0, 0.7), (max_dbm+100.0)/20.0);
@@ -314,19 +257,15 @@ void main() {
     m_shader = std::make_unique<shader_t>(VERTEX_SHADER, FRAG_SRC);
   }
 
-  resize_fbo(512, 512); // Or screen size? Fixed size for texture is fine.
-
+  resize_fbo(512, 512);
   update_elevation_texture(service, min_lat, max_lat, min_lon, max_lon);
 
   // Setup Uniforms
   m_shader->bind();
 
-  // Bounds in meters
-  // approximate: 1 deg lat = 111km. 1 deg lon = 111km * cos(lat)
   double mid_lat = (min_lat + max_lat) * 0.5;
   double height_m = (max_lat - min_lat) * 111000.0;
-  double width_m =
-      (max_lon - min_lon) * 111000.0 * std::cos(mid_lat * 3.14159 / 180.0);
+  double width_m = (max_lon - min_lon) * 111000.0 * std::cos(mid_lat * 3.14159 / 180.0);
   m_shader->set_vec2("u_bounds_meters", (float)width_m, (float)height_m);
 
   // Upload Sensors
@@ -336,14 +275,10 @@ void main() {
   std::vector<float> u_p2;
 
   for (const auto &s : sensors) {
-    if (count >= 32)
-      break;
+    if (count >= 32) break;
 
-    // Normalized UV pos (0-1 relative to bounds)
     float u = (float)((s.get_longitude() - min_lon) / (max_lon - min_lon));
     float v = (float)((s.get_latitude() - min_lat) / (max_lat - min_lat));
-
-    // Range in roughly UV units (use Width as ref)
     float range_uv = (float)(s.get_range() / width_m);
 
     u_pos_range.push_back(u);
@@ -358,7 +293,6 @@ void main() {
 
     u_p2.push_back((float)s.get_tx_antenna_gain_dbi());
     u_p2.push_back((float)s.get_mast_height());
-    // For ground, we should sample texture, but for now take sensor value
     u_p2.push_back((float)s.get_ground_elevation());
     u_p2.push_back((float)s.get_propagation_model());
 
