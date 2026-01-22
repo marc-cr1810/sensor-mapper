@@ -2,8 +2,13 @@
 #include "core/geo_math.hpp"
 #include "stb_image.h"
 #include <cpr/cpr.h>
+#include <filesystem>
 #include <format>
+#include <fstream>
 #include <iostream>
+
+
+namespace fs = std::filesystem;
 
 namespace sensor_mapper {
 
@@ -68,6 +73,55 @@ auto elevation_service_t::get_elevation(double lat, double lon,
   }
 
   if (!is_loading) {
+    // Check disk cache first
+    auto key = make_key(ELEVATION_ZOOM, tx, ty);
+    fs::path cache_file = fs::path("cache/elevation") /
+                          std::format("{}_{}_{}.png", ELEVATION_ZOOM, tx, ty);
+
+    if (fs::exists(cache_file)) {
+      // Load from disk immediately (synchronous for simplicity, or could be
+      // async)
+      std::ifstream f(cache_file, std::ios::binary);
+      std::vector<char> buffer(std::istreambuf_iterator<char>(f), {});
+      if (!buffer.empty()) {
+        std::string data(buffer.begin(), buffer.end());
+
+        // Process immediately
+        auto tile = std::make_shared<elevation_tile_t>();
+        tile->z = ELEVATION_ZOOM;
+        tile->x = tx;
+        tile->y = ty;
+
+        int width, height, channels;
+        unsigned char *img_data = stbi_load_from_memory(
+            reinterpret_cast<const unsigned char *>(data.data()),
+            static_cast<int>(data.size()), &width, &height, &channels, 0);
+
+        if (img_data) {
+          tile->heights.resize(width * height);
+          for (int i = 0; i < width * height; i++) {
+            int r = img_data[i * channels + 0];
+            int g = img_data[i * channels + 1];
+            int b = img_data[i * channels + 2];
+            float h = (r * 256.0f + g + b / 256.0f) - 32768.0f;
+            tile->heights[i] = h;
+          }
+          tile->valid = true;
+          stbi_image_free(img_data);
+        }
+        m_cache[key] = tile;
+
+        // Re-check cache directly?
+        // Just return true? No, the caller loop will re-call get_elevation next
+        // frame or immediately. But we need to fill the out_height NOW if
+        // possible? The original logic returns false if cache miss. If we
+        // loaded it here, we should probably recurse or copy the logic to
+        // return true. For simplicity, we just populate the cache and return
+        // false (next frame will catch it).
+        return false;
+      }
+    }
+
     fetch_tile(ELEVATION_ZOOM, tx, ty);
   }
 
@@ -84,13 +138,26 @@ auto elevation_service_t::fetch_tile(int z, int x, int y) -> void {
       "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{}/{}/{}.png", z,
       x, y);
 
-  m_pending.push_back({z, x, y, std::async(std::launch::async, [url]() {
-                         cpr::Response r = cpr::Get(cpr::Url{url});
-                         if (r.status_code == 200) {
-                           return r.text;
-                         }
-                         return std::string();
-                       })});
+  fs::path cache_file =
+      fs::path("cache/elevation") / std::format("{}_{}_{}.png", z, x, y);
+  std::string save_path = cache_file.string();
+
+  m_pending.push_back(
+      {z, x, y, std::async(std::launch::async, [url, save_path]() {
+         cpr::Response r = cpr::Get(cpr::Url{url});
+         if (r.status_code == 200) {
+           // Save to disk
+           try {
+             fs::path p(save_path);
+             fs::create_directories(p.parent_path());
+             std::ofstream f(p, std::ios::binary);
+             f.write(r.text.data(), r.text.size());
+           } catch (...) {
+           }
+           return r.text;
+         }
+         return std::string();
+       })});
 }
 
 auto elevation_service_t::update() -> void {

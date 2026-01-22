@@ -82,6 +82,8 @@ set(SOURCES
     src/core/geo_math.hpp
     src/core/persistence.cpp
     src/core/persistence.hpp
+    src/core/rf_engine.cpp
+    src/core/rf_engine.hpp
     src/core/sensor.cpp
     src/core/sensor.hpp
     src/core/tile_service.cpp

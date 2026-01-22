@@ -29,3 +29,4 @@ external/
 # Runtime generated
 imgui.ini
 *.log
+cache/

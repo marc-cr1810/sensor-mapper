@@ -1,7 +1,13 @@
 #include "core/tile_service.hpp"
+#include "ui/texture.hpp"
 #include <cpr/cpr.h>
+#include <filesystem>
 #include <format>
+#include <fstream>
 #include <iostream>
+
+
+namespace fs = std::filesystem;
 
 namespace sensor_mapper {
 
@@ -16,7 +22,7 @@ auto tile_service_t::make_key(int z, int x, int y) -> tile_key_t {
 auto tile_service_t::set_source(tile_source_t source) -> void {
   if (m_source != source) {
     m_source = source;
-    // Clear cache to force reload
+    // Clear in-memory cache
     m_cache.clear();
     m_pending.clear();
     m_loading_keys.clear();
@@ -41,6 +47,32 @@ auto tile_service_t::get_tile(int z, int x, int y)
       return nullptr;
   }
 
+  // Check disk cache
+  fs::path cache_dir = "cache/tiles";
+  if (m_source == tile_source_t::OSM)
+    cache_dir /= "osm";
+  else if (m_source == tile_source_t::TERRARIUM)
+    cache_dir /= "terrarium";
+  else
+    cache_dir /= "satellite";
+
+  fs::path file_path = cache_dir / std::format("{}_{}_{}.png", z, x, y);
+
+  // If exists on disk, load immediately
+  if (fs::exists(file_path)) {
+    auto texture = std::make_shared<texture_t>();
+    // Load raw bytes
+    std::ifstream f(file_path, std::ios::binary);
+    std::vector<unsigned char> buffer(std::istreambuf_iterator<char>(f), {});
+
+    if (!buffer.empty()) {
+      if (texture->load_from_memory(buffer.data(), buffer.size())) {
+        m_cache[key] = texture;
+        return texture;
+      }
+    }
+  }
+
   // Start fetch
   m_loading_keys.push_back(key);
 
@@ -54,21 +86,31 @@ auto tile_service_t::get_tile(int z, int x, int y)
                       z, x, y);
   } else {
     // Esri World Imagery (Satellite)
-    // Note: ArcGIS REST services typically use .../tile/{z}/{y}/{x}
     url = std::format("https://server.arcgisonline.com/ArcGIS/rest/services/"
                       "World_Imagery/MapServer/tile/{}/{}/{}",
                       z, y, x);
   }
 
-  m_pending.push_back({z, x, y, std::async(std::launch::async, [url]() {
-                         cpr::Response r = cpr::Get(
-                             cpr::Url{url},
-                             cpr::Header{{"User-Agent", "SensorMapper/0.1"}});
-                         if (r.status_code == 200) {
-                           return r.text;
-                         }
-                         return std::string();
-                       })});
+  // Pass file_path to the async task to save it later
+  std::string save_path = file_path.string();
+
+  m_pending.push_back(
+      {z, x, y, std::async(std::launch::async, [url, save_path]() {
+         cpr::Response r = cpr::Get(
+             cpr::Url{url}, cpr::Header{{"User-Agent", "SensorMapper/0.1"}});
+         if (r.status_code == 200) {
+           // Save to disk
+           try {
+             fs::path p(save_path);
+             fs::create_directories(p.parent_path());
+             std::ofstream f(p, std::ios::binary);
+             f.write(r.text.data(), r.text.size());
+           } catch (...) {
+           }
+           return r.text;
+         }
+         return std::string();
+       })});
 
   return nullptr;
 }

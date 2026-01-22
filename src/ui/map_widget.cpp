@@ -1,9 +1,15 @@
 #include "ui/map_widget.hpp"
 #include "core/geo_math.hpp"
+#include "core/rf_engine.hpp"
+#include "imgui_impl_opengl3.h"
+#include <algorithm>
 #include <cmath>
 #include <format>
 #include <string>
 #include <vector>
+
+// On Windows with GLFW, usually just including glfw is enough or glad
+#include <GLFW/glfw3.h>
 
 namespace sensor_mapper {
 
@@ -12,52 +18,34 @@ map_widget_t::map_widget_t()
       ,
       m_center_lon(151.2093), m_zoom(10.0), m_show_rf_gradient(false),
       m_tile_service(std::make_unique<tile_service_t>()),
-      m_building_service(std::make_unique<building_service_t>()) {}
+      m_building_service(std::make_unique<building_service_t>()),
+      m_rf_engine(std::make_unique<rf_engine_t>()) {
 
-static auto calculate_fspl(double d_km, double f_mhz) -> double {
-  if (d_km <= 0.001)
-    return 0.0;
-  return 20.0 * std::log10(d_km) + 20.0 * std::log10(f_mhz) + 32.44;
+  // Init texture
+  glGenTextures(1, &m_heatmap_texture_id);
+  glBindTexture(GL_TEXTURE_2D, m_heatmap_texture_id);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+  glBindTexture(GL_TEXTURE_2D, 0);
 }
 
-static auto calculate_hata(double d_km, double f_mhz, double h_tx, double h_rx,
-                           PropagationModel model) -> double {
-  if (d_km <= 0.001)
-    return 0.0;
-  // Hata validity: 150-1500 MHz, 1-20km, h_tx 30-200m, h_rx 1-10m.
-  // We will extend formulas slightly outside range but clamp/warn if needed.
-  // Using standard urban formula base:
-  // Lu = 69.55 + 26.16 log f - 13.82 log h_tx - a(h_rx) + (44.9 - 6.55 log
-  // h_tx) log d
-
-  double log_f = std::log10(f_mhz);
-  double log_h_tx = std::log10(std::max(1.0, h_tx));
-  double log_d = std::log10(d_km);
-
-  // Correction factor a(h_rx) for small/medium city
-  // a(h_rx) = (1.1 log f - 0.7) h_rx - (1.56 log f - 0.8)
-  double a_h_rx = (1.1 * log_f - 0.7) * h_rx - (1.56 * log_f - 0.8);
-
-  double loss_urban = 69.55 + 26.16 * log_f - 13.82 * log_h_tx - a_h_rx +
-                      (44.9 - 6.55 * log_h_tx) * log_d;
-
-  if (model == PropagationModel::HataUrban) {
-    return loss_urban;
-  } else if (model == PropagationModel::HataSuburban) {
-    // Suburban: L = Lu - 2 [log(f/28)]^2 - 5.4
-    double term = std::log10(f_mhz / 28.0);
-    return loss_urban - 2.0 * term * term - 5.4;
-  } else { // Rural
-    // Rural: L = Lu - 4.78 (log f)^2 + 18.33 log f - 40.94
-    return loss_urban - 4.78 * log_f * log_f + 18.33 * log_f - 40.94;
+map_widget_t::~map_widget_t() {
+  if (m_heatmap_texture_id) {
+    glDeleteTextures(1, &m_heatmap_texture_id);
   }
 }
-
-map_widget_t::~map_widget_t() {}
 
 auto map_widget_t::update() -> void {
   m_tile_service->update();
   m_building_service->update();
+
+  // Check async RF result
+  if (m_coverage_future.valid() &&
+      m_coverage_future.wait_for(std::chrono::seconds(0)) ==
+          std::future_status::ready) {
+    m_latest_grid = m_coverage_future.get();
+    m_heatmap_dirty = true;
+  }
 }
 
 auto map_widget_t::set_center(double lat, double lon) -> void {
@@ -144,11 +132,10 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors,
 
   // Simple canvas
   ImVec2 canvas_p0 = ImGui::GetCursorScreenPos();
-  ImVec2 canvas_sz = ImGui::GetContentRegionAvail();
-  if (canvas_sz.x < 50.0f)
-    canvas_sz.x = 50.0f;
-  if (canvas_sz.y < 50.0f)
-    canvas_sz.y = 50.0f;
+  ImVec2 canvas_sz_raw = ImGui::GetContentRegionAvail();
+  ImVec2 canvas_sz(
+      static_cast<float>(canvas_sz_raw.x < 50.0f ? 50.0f : canvas_sz_raw.x),
+      static_cast<float>(canvas_sz_raw.y < 50.0f ? 50.0f : canvas_sz_raw.y));
 
   ImDrawList *draw_list = ImGui::GetWindowDrawList();
   draw_list->AddRectFilled(
@@ -434,6 +421,7 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors,
         // 1 meter in pixels approx?
         // Earth circum ~ 40Mm. World size = 256 * 2^zoom.
         // pixels_per_meter = world_size_pixels / (40075000.0 * cos(lat))
+        // pixels_per_meter = world_size_pixels / (40075000.0 * cos(lat))
         double meters_per_pixel =
             (40075000.0 * std::cos(m_center_lat * 3.14159 / 180.0)) /
             world_size_pixels;
@@ -490,7 +478,7 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors,
   }
 
   // --- Draw All Sensors ---
-  auto dbm_to_color = [](double p_rx_dbm) -> ImU32 {
+  auto dbm_to_color_lambda = [](double p_rx_dbm) -> ImU32 {
     int r, g, b, a;
     if (p_rx_dbm >= -60.0) {
       r = 0;
@@ -498,115 +486,125 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors,
       b = 0;
       a = 200;
     } else if (p_rx_dbm >= -80.0) {
-      float t = (p_rx_dbm + 80.0) / 20.0;
-      r = static_cast<int>((1.0f - t) * 255);
+      float t = static_cast<float>((p_rx_dbm + 80.0) / 20.0);
+      r = static_cast<int>((1.0f - t) * 255.0f);
       g = 255;
       b = 0;
       a = 180;
     } else if (p_rx_dbm >= -100.0) {
-      float t = (p_rx_dbm + 100.0) / 20.0;
+      float t = static_cast<float>((p_rx_dbm + 100.0) / 20.0);
       r = 255;
-      g = static_cast<int>(t * 255);
+      g = static_cast<int>(t * 255.0f);
       b = 0;
       a = 120;
     } else {
-      float t = std::max(0.0, (p_rx_dbm + 120.0) / 20.0);
+      float t = static_cast<float>(std::max(0.0, (p_rx_dbm + 120.0) / 20.0));
       r = 255;
       g = 0;
       b = 0;
-      a = static_cast<int>(t * 80);
+      a = static_cast<int>(t * 80.0f);
     }
     return IM_COL32(r, g, b, a);
   };
 
   if (m_show_composite) {
-    // Composite Grid Rendering
-    int grid_step = 10;
-    int cols = static_cast<int>(canvas_sz.x / grid_step) + 1;
-    int rows = static_cast<int>(canvas_sz.y / grid_step) + 1;
+    // Composite Grid Rendering (Async Texture)
+    // 1. Check if we need to trigger update
+    // e.g. if camera moved significantly? For now, trigger explicitly or
+    // periodical? Let's trigger if future is not valid and not running.
+    // Simplifying: Trigger if we don't have a future pending.
 
-    for (int gy = 0; gy < rows; ++gy) {
-      for (int gx = 0; gx < cols; ++gx) {
-        float px = canvas_p0.x + gx * grid_step;
-        float py = canvas_p0.y + gy * grid_step;
+    // Bounds
+    double min_lat, max_lat, min_lon, max_lon;
+    double c_min_wx = center_wx - view_half_w;
+    double c_max_wx = center_wx + view_half_w;
+    double c_min_wy = center_wy - view_half_h;
+    double c_max_wy = center_wy + view_half_h;
 
-        // Center of cell
-        float cx = px + grid_step * 0.5f;
-        float cy = py + grid_step * 0.5f;
+    geo::world_to_lat_lon(c_min_wx, c_min_wy, max_lat, min_lon); // Note Y flip
+    geo::world_to_lat_lon(c_max_wx, c_max_wy, min_lat, max_lon);
+    // Ensure min/max correct
+    if (min_lat > max_lat)
+      std::swap(min_lat, max_lat);
+    if (min_lon > max_lon)
+      std::swap(min_lon, max_lon);
 
-        // Convert Screen to World
-        double wx = center_wx + (cx - screen_center.x) / world_size_pixels;
-        double wy = center_wy + (cy - screen_center.y) / world_size_pixels;
+    bool is_computing = m_coverage_future.valid();
 
-        // Wrap X
-        if (wx - center_wx > 0.5)
-          wx -= 1.0;
-        if (wx - center_wx < -0.5)
-          wx += 1.0;
+    // Trigger logic: If not computing, and (grid missing OR dirty), trigger
+    // Ideally only trigger when map settles.
+    if (!is_computing && (m_heatmap_dirty || !m_latest_grid)) {
+      m_coverage_future = m_rf_engine->compute_coverage(
+          sensors, min_lat, max_lat, min_lon, max_lon, 256,
+          256);                // Fixed resolution for heatmap
+      m_heatmap_dirty = false; // "Clean" until result comes back
+    }
 
-        // Simple clamp check for Y
-        if (wy < 0.0 || wy > 1.0)
-          continue;
+    // Upload texture if dirty (new grid arrived in update())
+    if (m_latest_grid && m_heatmap_dirty) {
+      // ... Wait, we set dirty=true in update(), so we upload here.
+      std::vector<unsigned char> pixels;
+      pixels.resize(m_latest_grid->width * m_latest_grid->height * 4);
 
-        double cell_lat, cell_lon;
-        geo::world_to_lat_lon(wx, wy, cell_lat, cell_lon);
-
-        double max_dbm = -200.0;
-
-        // Check all sensors
-        for (const auto &sensor : sensors) {
-          double dist_m =
-              geo::distance(sensor.get_latitude(), sensor.get_longitude(),
-                            cell_lat, cell_lon);
-          if (dist_m > sensor.get_range())
-            continue;
-
-          // Logic adapted from sensor loop
-          double angle =
-              geo::bearing(sensor.get_latitude(), sensor.get_longitude(),
-                           cell_lat, cell_lon);
-
-          // Antenna Pattern
-          double azimuth = sensor.get_azimuth_deg();
-          double beamwidth = sensor.get_beamwidth_deg();
-          double angle_diff = std::abs(angle - azimuth);
-          if (angle_diff > 180.0)
-            angle_diff = 360.0 - angle_diff;
-          double pattern_loss = (angle_diff > beamwidth / 2.0) ? 25.0 : 0.0;
-
-          // Path Loss
-          double d_km = dist_m / 1000.0;
-          double path_loss = 0.0;
-          double h_tx =
-              sensor
-                  .get_mast_height(); // Simplified, should include ground elev
-          // Note: In real sim we need relative height.
-          // We'll approximate h_tx as mast_height (AGL) assuming flat terrain
-          // for relative calc or similar For strict Hata, h_tx is effective
-          // height. Let's use mast_height for now, or fetch elevation
-          // (expensive in grid loop!) Optim: Assume flat terrain for heatmap or
-          // use very cached elevation. We'll skip elevation fetch for grid mode
-          // 60fps perf.
-
-          if (sensor.get_propagation_model() == PropagationModel::FreeSpace) {
-            path_loss = calculate_fspl(d_km, sensor.get_frequency_mhz());
-          } else {
-            path_loss = calculate_hata(d_km, sensor.get_frequency_mhz(), h_tx,
-                                       2.0, sensor.get_propagation_model());
-          }
-
-          double rx =
-              sensor.get_tx_power_dbm() + sensor.get_tx_antenna_gain_dbi() +
-              sensor.get_rx_antenna_gain_dbi() - path_loss - pattern_loss;
-          if (rx > max_dbm)
-            max_dbm = rx;
+      auto dbm_to_color_grid = [](double p_rx_dbm, unsigned char &r,
+                                  unsigned char &g, unsigned char &b,
+                                  unsigned char &a) {
+        if (p_rx_dbm >= -60.0) {
+          r = 0;
+          g = 255;
+          b = 0;
+          a = 200;
+        } else if (p_rx_dbm >= -80.0) {
+          float t = (float)(p_rx_dbm + 80.0) / 20.0f;
+          r = (unsigned char)((1.0f - t) * 255);
+          g = 255;
+          b = 0;
+          a = 180;
+        } else if (p_rx_dbm >= -100.0) {
+          float t = (float)(p_rx_dbm + 100.0) / 20.0f;
+          r = 255;
+          g = (unsigned char)(t * 255);
+          b = 0;
+          a = 120;
+        } else {
+          float t = std::max(0.0f, (float)(p_rx_dbm + 120.0) / 20.0f);
+          r = 255;
+          g = 0;
+          b = 0;
+          a = (unsigned char)(t * 80);
         }
+      };
 
-        if (max_dbm >= -120.0) {
-          ImU32 col = dbm_to_color(max_dbm);
-          draw_list->AddRectFilled(ImVec2(px, py),
-                                   ImVec2(px + grid_step, py + grid_step), col);
+      for (size_t i = 0; i < m_latest_grid->signal_dbm.size(); ++i) {
+        unsigned char r, g, b, a;
+        float val = m_latest_grid->signal_dbm[i];
+        if (val > -150.0f) {
+          dbm_to_color_grid(val, r, g, b, a);
+        } else {
+          r = 0;
+          g = 0;
+          b = 0;
+          a = 0;
         }
+        pixels[i * 4 + 0] = r;
+        pixels[i * 4 + 1] = g;
+        pixels[i * 4 + 2] = b;
+        pixels[i * 4 + 3] = a;
+      }
+
+      glBindTexture(GL_TEXTURE_2D, m_heatmap_texture_id);
+      glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, m_latest_grid->width,
+                   m_latest_grid->height, 0, GL_RGBA, GL_UNSIGNED_BYTE,
+                   pixels.data());
+      m_heatmap_dirty = false;
+    }
+
+    // Draw Texture
+    if (m_latest_grid) {
+      if (m_heatmap_texture_id != 0) {
+        draw_list->AddImage(
+            (ImTextureID)(intptr_t)m_heatmap_texture_id, canvas_p0,
+            ImVec2(canvas_p0.x + canvas_sz.x, canvas_p0.y + canvas_sz.y));
       }
     }
 
@@ -785,11 +783,11 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors,
             double d_km = test_dist / 1000.0;
             double path_loss_db = 0.0;
             if (prop_model == PropagationModel::FreeSpace) {
-              path_loss_db = calculate_fspl(d_km, frequency_mhz);
+              path_loss_db = rf_engine_t::calculate_fspl(d_km, frequency_mhz);
             } else {
               // Assume 2m receiver height
-              path_loss_db = calculate_hata(d_km, frequency_mhz, sensor_h, 2.0,
-                                            prop_model);
+              path_loss_db = rf_engine_t::calculate_hata(
+                  d_km, frequency_mhz, sensor_h, 2.0, prop_model);
             }
 
             // Calculate terrain attenuation
@@ -924,10 +922,10 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors,
           double d_km = dist_m / 1000.0;
           double path_loss_db = 0.0;
           if (prop_model == PropagationModel::FreeSpace) {
-            path_loss_db = calculate_fspl(d_km, frequency_mhz);
+            path_loss_db = rf_engine_t::calculate_fspl(d_km, frequency_mhz);
           } else {
-            path_loss_db =
-                calculate_hata(d_km, frequency_mhz, sensor_h, 2.0, prop_model);
+            path_loss_db = rf_engine_t::calculate_hata(
+                d_km, frequency_mhz, sensor_h, 2.0, prop_model);
           }
 
           // Quick terrain loss (simplified for edge points)
@@ -1042,9 +1040,9 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors,
           auto &cached_signal = m_view_cache[s_id].signal_dbm;
 
           for (size_t i = 0; i < points.size(); ++i) {
-            ImU32 edge_col1 = dbm_to_color(cached_signal[i]);
+            ImU32 edge_col1 = dbm_to_color_lambda(cached_signal[i]);
             ImU32 edge_col2 =
-                dbm_to_color(cached_signal[(i + 1) % points.size()]);
+                dbm_to_color_lambda(cached_signal[(i + 1) % points.size()]);
 
             draw_list->PrimReserve(3, 3);
             draw_list->PrimWriteVtx(center_pt, uv, center_col);
