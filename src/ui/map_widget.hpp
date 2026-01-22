@@ -3,6 +3,7 @@
 #include "core/building_service.hpp"
 #include "core/elevation_service.hpp"
 #include "core/sensor.hpp"
+#include "core/tdoa_solver.hpp"
 #include "core/tile_service.hpp"
 #include "imgui.h"
 #include <functional>
@@ -94,6 +95,67 @@ public:
     m_heatmap_dirty = true;
   }
 
+  // TDOA visualization controls
+  auto get_show_tdoa_analysis() const -> bool
+  {
+    return m_show_tdoa_analysis;
+  }
+  auto set_show_tdoa_analysis(bool show) -> void
+  {
+    m_show_tdoa_analysis = show;
+  }
+
+  auto get_show_hyperbolas() const -> bool
+  {
+    return m_show_hyperbolas;
+  }
+  auto set_show_hyperbolas(bool show) -> void
+  {
+    m_show_hyperbolas = show;
+  }
+
+  auto get_show_gdop_contours() const -> bool
+  {
+    return m_show_gdop_contours;
+  }
+  auto set_show_gdop_contours(bool show) -> void
+  {
+    m_show_gdop_contours = show;
+  }
+
+  auto get_show_accuracy_heatmap() const -> bool
+  {
+    return m_show_accuracy_heatmap;
+  }
+  auto set_show_accuracy_heatmap(bool show) -> void
+  {
+    m_show_accuracy_heatmap = show;
+  }
+
+  // Test point management
+  auto set_tdoa_test_point(double lat, double lon) -> void;
+  auto get_tdoa_test_result() const -> const tdoa_result_t &
+  {
+    return m_test_result;
+  }
+  auto has_tdoa_test_point() const -> bool
+  {
+    return m_has_test_point;
+  }
+  auto clear_tdoa_test_point() -> void
+  {
+    m_has_test_point = false;
+  }
+
+  auto get_timing_jitter_ns() const -> float
+  {
+    return m_timing_jitter_ns;
+  }
+  auto set_timing_jitter_ns(float jitter) -> void
+  {
+    m_timing_jitter_ns = jitter;
+  }
+
 private:
   double m_center_lat;
   double m_center_lon;
@@ -127,6 +189,27 @@ private:
   // We don't need async futures anymore, GPU is immediate(ish)
   unsigned int m_heatmap_texture_id = 0;
   bool m_heatmap_dirty = true;
+
+  // TDOA visualization state
+  bool m_show_tdoa_analysis = false;
+  bool m_show_hyperbolas = true;
+  bool m_show_gdop_contours = false;
+  bool m_show_accuracy_heatmap = false;
+  float m_timing_jitter_ns = 10.0f; // Default GPS-disciplined timing
+
+  // Test point state
+  bool m_has_test_point = false;
+  double m_test_point_lat = 0.0;
+  double m_test_point_lon = 0.0;
+  tdoa_result_t m_test_result;
+
+  std::unique_ptr<tdoa_solver_t> m_tdoa_solver;
+
+  // Rendering helpers
+  auto render_hyperbolas(const std::vector<sensor_t> &sensors, ImDrawList *draw_list) -> void;
+  auto render_gdop_contours(const std::vector<sensor_t> &sensors, ImDrawList *draw_list) -> void;
+  auto render_accuracy_heatmap(const std::vector<sensor_t> &sensors, ImDrawList *draw_list) -> void;
+  auto render_test_point(ImDrawList *draw_list) -> void;
 };
 
 } // namespace sensor_mapper

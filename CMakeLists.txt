@@ -82,34 +82,36 @@ FetchContent_MakeAvailable(json)
 
 # Source Files
 set(SOURCES
-    src/main.cpp
-    src/core/antenna_pattern.hpp
-    src/core/antenna_pattern_io.hpp
-    src/core/antenna_pattern_library.hpp
-    src/core/antenna_pattern_viz.hpp
-    src/core/building_service.cpp
-    src/core/building_service.hpp
-    src/core/elevation_service.cpp
-    src/core/elevation_service.hpp
-    src/core/geo_math.hpp
-    src/core/persistence.cpp
-    src/core/persistence.hpp
-    src/core/rf_engine.cpp
-    src/core/rf_engine.hpp
-    src/core/sensor.cpp
-    src/core/sensor.hpp
-    src/core/tile_service.cpp
-    src/core/tile_service.hpp
-    src/renderer/shader.cpp
-    src/renderer/shader.hpp
-    src/renderer/gpu_rf_engine.cpp
-    src/renderer/gpu_rf_engine.hpp
-    src/ui/map_widget.cpp
-    src/ui/map_widget.hpp
-    src/ui/texture.cpp
-    src/ui/texture.hpp
-    src/ui/antenna_pattern_ui.hpp
-    src/ui/antenna_pattern_3d_viewer.hpp
+  src/main.cpp
+  src/core/antenna_pattern.hpp
+  src/core/antenna_pattern_io.hpp
+  src/core/antenna_pattern_library.hpp
+  src/core/antenna_pattern_viz.hpp
+  src/core/building_service.cpp
+  src/core/building_service.hpp
+  src/core/elevation_service.cpp
+  src/core/elevation_service.hpp
+  src/core/geo_math.hpp
+  src/core/persistence.cpp
+  src/core/persistence.hpp
+  src/core/rf_engine.cpp
+  src/core/rf_engine.hpp
+  src/core/sensor.cpp
+  src/core/sensor.hpp
+  src/core/tdoa_solver.cpp
+  src/core/tdoa_solver.hpp
+  src/core/tile_service.cpp
+  src/core/tile_service.hpp
+  src/renderer/shader.cpp
+  src/renderer/shader.hpp
+  src/renderer/gpu_rf_engine.cpp
+  src/renderer/gpu_rf_engine.hpp
+  src/ui/map_widget.cpp
+  src/ui/map_widget.hpp
+  src/ui/texture.cpp
+  src/ui/texture.hpp
+  src/ui/antenna_pattern_ui.hpp
+  src/ui/antenna_pattern_3d_viewer.hpp
 )
 
 # Executable

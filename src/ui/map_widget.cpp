@@ -17,11 +17,12 @@
 namespace sensor_mapper
 {
 
-map_widget_t::map_widget_t()
-    : m_center_lat(-33.8688) // Sydney
-      ,
-      m_center_lon(151.2093), m_zoom(10.0), m_show_rf_gradient(false), m_tile_service(std::make_unique<tile_service_t>()), m_building_service(std::make_unique<building_service_t>()), m_rf_engine(std::make_unique<gpu_rf_engine_t>())
+map_widget_t::map_widget_t() : m_center_lat(-33.8688), m_center_lon(151.2093), m_zoom(14.0), m_show_rf_gradient(false)
 {
+  m_tile_service = std::make_unique<tile_service_t>();
+  m_building_service = std::make_unique<building_service_t>();
+  m_rf_engine = std::make_unique<gpu_rf_engine_t>();
+  m_tdoa_solver = std::make_unique<tdoa_solver_t>();
 
   // Texture managed by gpu_rf_engine now, or we just hold the ID it returns.
   // m_heatmap_texture_id initialized to 0.
@@ -1131,6 +1132,45 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors, int &selected_inde
   draw_list->AddText(overlay_pos, IM_COL32(0, 0, 0, 255), info_text.c_str());
 
   draw_list->PopClipRect();
+}
+
+auto map_widget_t::set_tdoa_test_point(double lat, double lon) -> void
+{
+  m_has_test_point = true;
+  m_test_point_lat = lat;
+  m_test_point_lon = lon;
+
+  // Calculate TDOA solution - this will be called when we have the current sensor list
+  // For now, just mark that we have a test point
+}
+
+auto map_widget_t::render_hyperbolas(const std::vector<sensor_t> &sensors, ImDrawList *draw_list) -> void
+{
+  if (sensors.size() < 2 || !m_tdoa_solver)
+    return;
+
+  (void)draw_list; // Suppress unused parameter warning
+  // Render hyperbolas for each sensor pair
+  // For now, this is a placeholder - full implementation in next phase
+}
+
+auto map_widget_t::render_gdop_contours(const std::vector<sensor_t> &sensors, ImDrawList *draw_list) -> void
+{
+  (void)sensors;   // Suppress unused parameter warning
+  (void)draw_list; // Suppress unused parameter warning
+  // GDOP contour rendering - placeholder for now
+}
+
+auto map_widget_t::render_accuracy_heatmap(const std::vector<sensor_t> &sensors, ImDrawList *draw_list) -> void
+{
+  (void)sensors;   // Suppress unused parameter warning
+  (void)draw_list; // Suppress unused parameter warning
+  // Accuracy heatmap rendering - placeholder for now
+}
+
+auto map_widget_t::render_test_point(ImDrawList *draw_list) -> void
+{
+  // Test point rendering - placeholder for now
 }
 
 } // namespace sensor_mapper

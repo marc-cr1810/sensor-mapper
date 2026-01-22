@@ -447,5 +447,95 @@ void render_ui(map_widget_t &map, std::vector<sensor_t> &sensors, int &selected_
              });
   }
   ImGui::End();
+
+  // TDOA Analysis Panel
+  if (ImGui::Begin("TDOA Analysis"))
+  {
+    bool tdoa_enabled = map.get_show_tdoa_analysis();
+    if (ImGui::Checkbox("Enable TDOA Visualization", &tdoa_enabled))
+    {
+      map.set_show_tdoa_analysis(tdoa_enabled);
+    }
+
+    if (tdoa_enabled)
+    {
+      ImGui::Separator();
+      ImGui::TextDisabled("VISUALIZATION OPTIONS");
+
+      bool show_hyperbolas = map.get_show_hyperbolas();
+      if (ImGui::Checkbox("Show Hyperbolas", &show_hyperbolas))
+      {
+        map.set_show_hyperbolas(show_hyperbolas);
+      }
+      if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Display time-difference curves between sensor pairs");
+
+      bool show_gdop = map.get_show_gdop_contours();
+      if (ImGui::Checkbox("Show GDOP Contours", &show_gdop))
+      {
+        map.set_show_gdop_contours(show_gdop);
+      }
+      if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Show geometric dilution of precision (lower is better)");
+
+      bool show_accuracy = map.get_show_accuracy_heatmap();
+      if (ImGui::Checkbox("Show Accuracy Heatmap", &show_accuracy))
+      {
+        map.set_show_accuracy_heatmap(show_accuracy);
+      }
+      if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Visualize expected positioning accuracy across coverage area");
+
+      ImGui::Separator();
+      ImGui::TextDisabled("TEST POINT");
+
+      if (map.has_tdoa_test_point())
+      {
+        auto result = map.get_tdoa_test_result();
+
+        ImGui::Text("Estimated Position:");
+        ImGui::Text("  Lat: %.6f°", result.latitude);
+        ImGui::Text("  Lon: %.6f°", result.longitude);
+        ImGui::Text("Error Estimate: %.1f m", result.error_estimate_m);
+        ImGui::Text("GDOP: %.2f", result.gdop);
+        ImGui::Text("Converged: %s", result.converged ? "Yes" : "No");
+
+        if (ImGui::Button("Clear Test Point"))
+        {
+          map.clear_tdoa_test_point();
+        }
+      }
+      else
+      {
+        ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "Shift+Click on map to place test point");
+      }
+
+      ImGui::Separator();
+      ImGui::TextDisabled("CONFIGURATION");
+
+      // Timing jitter slider
+      float timing_jitter = map.get_timing_jitter_ns();
+      if (ImGui::SliderFloat("Timing Jitter (ns)", &timing_jitter, 0.0f, 100.0f, "%.1f ns"))
+      {
+        map.set_timing_jitter_ns(timing_jitter);
+      }
+      if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("Clock synchronization error\nGPS-disciplined: ~10ns\nTypical: ~50ns");
+
+      // Display sensor count
+      ImGui::Text("Active Sensors: %zu", sensors.size());
+
+      // Warn if insufficient sensors
+      if (sensors.size() < 3)
+      {
+        ImGui::TextColored(ImVec4(1.0f, 0.3f, 0.3f, 1.0f), "⚠ Need at least 3 sensors for TDOA");
+      }
+      else
+      {
+        ImGui::TextColored(ImVec4(0.3f, 1.0f, 0.3f, 1.0f), "✓ %zu sensors ready for TDOA", sensors.size());
+      }
+    }
+  }
+  ImGui::End();
 }
 } // namespace sensor_mapper
