@@ -1,0 +1,52 @@
+#pragma once
+
+#include "core/elevation_service.hpp"
+#include "core/rf_engine.hpp" // For coverage_grid_t definition
+#include "core/sensor.hpp"
+#include "renderer/shader.hpp"
+#include <future>
+#include <memory>
+#include <vector>
+
+
+namespace sensor_mapper {
+
+class gpu_rf_engine_t {
+public:
+  gpu_rf_engine_t();
+  ~gpu_rf_engine_t();
+
+  // Replaces rf_engine_t::compute_coverage but returns a Texture ID directly!
+  // We don't return a std::future<coverage_grid> because the result stays on
+  // GPU. If we need the CPU data (e.g. for inspection), we'd need glGetTexImage
+  // (slow). For visualization, we just need the texture ID.
+  auto render(const std::vector<sensor_t> &sensors,
+              elevation_service_t *elevation_service, double min_lat,
+              double max_lat, double min_lon, double max_lon)
+      -> unsigned int; // returns Texture ID
+
+private:
+  std::unique_ptr<shader_t> m_shader;
+
+  // Framebuffer for rendering the result
+  unsigned int m_fbo = 0;
+  unsigned int m_result_texture = 0;
+  int m_fbo_width = 512;
+  int m_fbo_height = 512;
+
+  // Texture for uploading Elevation Data
+  unsigned int m_elevation_texture = 0;
+  int m_elevation_width = 0;
+  int m_elevation_height = 0;
+
+  // Fullscreen Quad
+  unsigned int m_quad_vao = 0;
+  unsigned int m_quad_vbo = 0;
+
+  void init_gl();
+  void resize_fbo(int width, int height);
+  void update_elevation_texture(elevation_service_t *service, double min_lat,
+                                double max_lat, double min_lon, double max_lon);
+};
+
+} // namespace sensor_mapper

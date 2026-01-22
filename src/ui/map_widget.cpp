@@ -1,12 +1,16 @@
 #include "ui/map_widget.hpp"
 #include "core/geo_math.hpp"
-#include "core/rf_engine.hpp"
+#include "ui/map_widget.hpp"
+
+// #include "core/rf_engine.hpp" // CPU engine
 #include "imgui_impl_opengl3.h"
+#include "renderer/gpu_rf_engine.hpp" // GPU Engine
 #include <algorithm>
 #include <cmath>
 #include <format>
 #include <string>
 #include <vector>
+
 
 // On Windows with GLFW, usually just including glfw is enough or glad
 #include <GLFW/glfw3.h>
@@ -19,14 +23,10 @@ map_widget_t::map_widget_t()
       m_center_lon(151.2093), m_zoom(10.0), m_show_rf_gradient(false),
       m_tile_service(std::make_unique<tile_service_t>()),
       m_building_service(std::make_unique<building_service_t>()),
-      m_rf_engine(std::make_unique<rf_engine_t>()) {
+      m_rf_engine(std::make_unique<gpu_rf_engine_t>()) {
 
-  // Init texture
-  glGenTextures(1, &m_heatmap_texture_id);
-  glBindTexture(GL_TEXTURE_2D, m_heatmap_texture_id);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-  glBindTexture(GL_TEXTURE_2D, 0);
+  // Texture managed by gpu_rf_engine now, or we just hold the ID it returns.
+  // m_heatmap_texture_id initialized to 0.
 }
 
 map_widget_t::~map_widget_t() {
@@ -39,13 +39,7 @@ auto map_widget_t::update() -> void {
   m_tile_service->update();
   m_building_service->update();
 
-  // Check async RF result
-  if (m_coverage_future.valid() &&
-      m_coverage_future.wait_for(std::chrono::seconds(0)) ==
-          std::future_status::ready) {
-    m_latest_grid = m_coverage_future.get();
-    m_heatmap_dirty = true;
-  }
+  // GPU engine is synchronous, no future check needed.
 }
 
 auto map_widget_t::set_center(double lat, double lon) -> void {

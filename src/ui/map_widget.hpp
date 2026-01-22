@@ -71,10 +71,8 @@ private:
   std::unique_ptr<building_service_t> m_building_service;
 
   // RF Engine
-  std::unique_ptr<class rf_engine_t> m_rf_engine;
-  std::future<std::shared_ptr<struct coverage_grid_t>> m_coverage_future;
-  std::shared_ptr<struct coverage_grid_t> m_latest_grid;
-  // We'll use a simple texture for the heatmap
+  std::unique_ptr<class gpu_rf_engine_t> m_rf_engine;
+  // We don't need async futures anymore, GPU is immediate(ish)
   unsigned int m_heatmap_texture_id = 0;
   bool m_heatmap_dirty = true;
 };

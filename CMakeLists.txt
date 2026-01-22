@@ -89,6 +89,10 @@ set(SOURCES
     src/core/sensor.hpp
     src/core/tile_service.cpp
     src/core/tile_service.hpp
+    src/renderer/shader.cpp
+    src/renderer/shader.hpp
+    src/renderer/gpu_rf_engine.cpp
+    src/renderer/gpu_rf_engine.hpp
     src/ui/map_widget.cpp
     src/ui/map_widget.hpp
     src/ui/texture.cpp
