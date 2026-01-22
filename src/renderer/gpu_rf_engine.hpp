@@ -22,7 +22,8 @@ public:
   // (slow). For visualization, we just need the texture ID.
   auto render(const std::vector<sensor_t> &sensors,
               elevation_service_t *elevation_service, double min_lat,
-              double max_lat, double min_lon, double max_lon)
+              double max_lat, double min_lon, double max_lon,
+              float min_signal_dbm = -90.0f)
       -> unsigned int; // returns Texture ID
 
 private:

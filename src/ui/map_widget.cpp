@@ -562,7 +562,7 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors,
       if (should_render) {
         m_heatmap_texture_id = m_rf_engine->render(
             sensors, &elevation_service, render_min_lat, render_max_lat, 
-            render_min_lon, render_max_lon);
+            render_min_lon, render_max_lon, m_min_signal_dbm);
         m_heatmap_dirty = false;
         last_render_time = current_time;
         

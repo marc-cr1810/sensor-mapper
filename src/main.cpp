@@ -332,6 +332,16 @@ void render_ui(map_widget_t &map, std::vector<sensor_t> &sensors,
       map.set_show_heatmap_overlay(show_heatmap);
     }
 
+    // Min Signal Threshold Slider
+    float min_signal = map.get_min_signal_dbm();
+    ImGui::SetNextItemWidth(200.0f);
+    if (ImGui::SliderFloat("Min Signal (dBm)", &min_signal, -120.0f, -50.0f, "%.0f dBm")) {
+      map.set_min_signal_dbm(min_signal);
+    }
+    if (ImGui::IsItemHovered()) {
+      ImGui::SetTooltip("Minimum signal strength to display.\nLower values = more coverage (slower)\nHigher values = less coverage (faster)");
+    }
+
     bool show_buildings = map.get_show_buildings();
     if (ImGui::Checkbox("Show 3D Buildings", &show_buildings)) {
       map.set_show_buildings(show_buildings);

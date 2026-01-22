@@ -49,6 +49,12 @@ public:
   auto get_show_heatmap_overlay() const -> bool { return m_show_heatmap_overlay; }
   auto set_show_heatmap_overlay(bool show) -> void { m_show_heatmap_overlay = show; }
 
+  auto get_min_signal_dbm() const -> float { return m_min_signal_dbm; }
+  auto set_min_signal_dbm(float dbm) -> void { 
+    m_min_signal_dbm = dbm; 
+    m_heatmap_dirty = true;  // Trigger re-render with new threshold
+  }
+
   // Mark the RF heatmap as dirty to trigger re-render
   auto invalidate_rf_heatmap() -> void { m_heatmap_dirty = true; }
 
@@ -64,6 +70,8 @@ private:
   bool m_show_composite = false;
   bool m_show_buildings = false;
   bool m_show_heatmap_overlay = true; // Show GPU-rendered coverage overlay
+  
+  float m_min_signal_dbm = -90.0f; // Minimum signal strength to display (dBm)
 
   // Smooth zoom/pan state (placeholder for now, using direct integers)
 

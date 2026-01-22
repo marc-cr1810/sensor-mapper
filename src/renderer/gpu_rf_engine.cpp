@@ -98,8 +98,9 @@ void gpu_rf_engine_t::resize_fbo(int width, int height) {
 void gpu_rf_engine_t::update_elevation_texture(elevation_service_t *service,
                                                double min_lat, double max_lat,
                                                double min_lon, double max_lon) {
-  int w = 256;
-  int h = 256;
+  // Use lower resolution for elevation texture to reduce memory and sampling cost
+  int w = 128;
+  int h = 128;
 
   std::vector<float> data(w * h);
 
@@ -126,7 +127,8 @@ void gpu_rf_engine_t::update_elevation_texture(elevation_service_t *service,
 
 auto gpu_rf_engine_t::render(const std::vector<sensor_t> &sensors,
                              elevation_service_t *service, double min_lat,
-                             double max_lat, double min_lon, double max_lon)
+                             double max_lat, double min_lon, double max_lon,
+                             float min_signal_dbm)
     -> unsigned int {
 
   // Lazy load shader
@@ -191,6 +193,9 @@ void main() {
 
     for(int i=0; i<MAX_SENSORS; ++i) {
         if (i >= u_sensor_count) break;
+        
+        // Early termination: if we already have excellent signal, skip remaining sensors
+        if (max_dbm >= -50.0) break;
 
         vec2 s_uv = u_sensor_pos_range[i].xy;
         float s_range = u_sensor_pos_range[i].z;
@@ -218,30 +223,48 @@ void main() {
         float angle_diff = abs(angle_deg - azi);
         if (angle_diff > 180.0) angle_diff = 360.0 - angle_diff;
         float pattern_loss = (angle_diff > beam/2.0) ? 25.0 : 0.0;
-
-        // LOS Check (Raymarch)
-        float diffraction_loss = 0.0;
-        int steps = 25;
+        
+        // Quick path loss estimation for early culling
+        float d_km = dist_m / 1000.0;
+        float quick_loss = 0.0;
         float h_tx = mast + ground;
+        if (model == 0) {
+            quick_loss = calculate_fspl(d_km, freq);
+        } else {
+            quick_loss = calculate_hata(d_km, freq, h_tx, 2.0);
+        }
+        
+        // Skip expensive raymarching if signal would be too weak anyway
+        float estimated_rx = tx_pwr + gain - quick_loss - pattern_loss - 10.0; // -10dB margin for terrain
+        if (estimated_rx < u_min_signal_dbm - 20.0) continue; // Skip if way below threshold
 
-        for(int s=1; s<steps; ++s) {
-            float t = float(s)/float(steps);
-            vec2 p_uv = s_uv + diff * t;
-            float p_h = texture(u_elevation, p_uv).r;
-            float r_h = h_tx + t * (h_rx - h_tx);
-            if (p_h > r_h) {
-                diffraction_loss = 30.0;
-                break;
+        // LOS Check (Adaptive Raymarch)
+        float diffraction_loss = 0.0;
+        
+        // Adaptive step count based on distance (fewer steps for close/far distances)
+        int steps = int(clamp(dist_m / 100.0, 5.0, 15.0));
+        
+        // Skip raymarching for very close distances (< 50m)
+        if (dist_m > 50.0) {
+            // Use larger steps for longer distances to reduce texture lookups
+            float step_increment = 1.0 / float(steps);
+            
+            for(int s=1; s<steps; ++s) {
+                float t = float(s) * step_increment;
+                vec2 p_uv = s_uv + diff * t;
+                float p_h = texture(u_elevation, p_uv).r;
+                float r_h = h_tx + t * (h_rx - h_tx);
+                
+                // Check for obstruction with small clearance buffer
+                if (p_h > r_h + 5.0) {
+                    diffraction_loss = 30.0;
+                    break;  // Early termination - no need to check further
+                }
             }
         }
 
-        // Path Loss
-        float d_km = dist_m / 1000.0;
-        float loss = 0.0;
-        if (model == 0) loss = calculate_fspl(d_km, freq);
-        else loss = calculate_hata(d_km, freq, h_tx, 2.0);
-
-        float rx = tx_pwr + gain - loss - pattern_loss - diffraction_loss;
+        // Use the path loss we already calculated
+        float rx = tx_pwr + gain - quick_loss - pattern_loss - diffraction_loss;
         max_dbm = max(max_dbm, rx);
     }
 
@@ -259,7 +282,20 @@ void main() {
     m_shader = std::make_unique<shader_t>(VERTEX_SHADER, FRAG_SRC);
   }
 
-  resize_fbo(512, 512);
+  // Adaptive resolution based on viewport size
+  // Reduce resolution for larger areas to improve performance
+  double area_deg = (max_lat - min_lat) * (max_lon - min_lon);
+  int resolution = 512;
+  
+  if (area_deg > 1.0) {
+    resolution = 256;  // Large area - use lower resolution
+  } else if (area_deg > 0.1) {
+    resolution = 384;  // Medium area
+  } else if (area_deg < 0.01) {
+    resolution = 768;  // Very zoomed in - use higher resolution
+  }
+  
+  resize_fbo(resolution, resolution);
   update_elevation_texture(service, min_lat, max_lat, min_lon, max_lon);
 
   // Setup Uniforms
@@ -269,16 +305,32 @@ void main() {
   double height_m = (max_lat - min_lat) * 111000.0;
   double width_m = (max_lon - min_lon) * 111000.0 * std::cos(mid_lat * 3.14159 / 180.0);
   m_shader->set_vec2("u_bounds_meters", (float)width_m, (float)height_m);
-  m_shader->set_float("u_min_signal_dbm", -100.0f);  // Hide weak signals below -100 dBm
+  m_shader->set_float("u_min_signal_dbm", min_signal_dbm);  // User-adjustable minimum signal threshold
 
-  // Upload Sensors
+  // Upload Sensors - Sort by power for better early termination
+  // Create indices sorted by transmit power (strongest first)
+  std::vector<size_t> sensor_indices(sensors.size());
+  for (size_t i = 0; i < sensors.size(); ++i) {
+    sensor_indices[i] = i;
+  }
+  
+  // Sort indices by transmit power + gain (descending)
+  std::sort(sensor_indices.begin(), sensor_indices.end(), 
+    [&sensors](size_t a, size_t b) {
+      double power_a = sensors[a].get_tx_power_dbm() + sensors[a].get_tx_antenna_gain_dbi();
+      double power_b = sensors[b].get_tx_power_dbm() + sensors[b].get_tx_antenna_gain_dbi();
+      return power_a > power_b;  // Strongest first
+    });
+  
   int count = 0;
   std::vector<float> u_pos_range;
   std::vector<float> u_p1;
   std::vector<float> u_p2;
 
-  for (const auto &s : sensors) {
+  for (size_t idx : sensor_indices) {
     if (count >= 32) break;
+    
+    const auto &s = sensors[idx];
 
     float u = (float)((s.get_longitude() - min_lon) / (max_lon - min_lon));
     float v = 1.0f - (float)((s.get_latitude() - min_lat) / (max_lat - min_lat));  // Flip V for OpenGL
