@@ -4,6 +4,10 @@ project(sensor_mapper VERSION 0.1.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Fix for M_PI on Windows
+add_compile_definitions(_USE_MATH_DEFINES)
+add_compile_definitions(NOMINMAX)
+
 # Dependencies
 include(FetchContent)
 
@@ -30,11 +34,20 @@ FetchContent_Declare(
     GIT_TAG        1.10.4
 )
 # CPR options to minimize build time/deps if needed, but defaults are usually fine for desktop
-# Build curl from source, but use system OpenSSL
+# Build curl from source
 set(CPR_USE_SYSTEM_CURL OFF CACHE BOOL "" FORCE)
 set(CPR_ENABLE_SSL ON CACHE BOOL "" FORCE)
 set(OPENSSL_USE_STATIC_LIBS OFF)
-find_package(OpenSSL REQUIRED)
+
+if(WIN32)
+    # Use native Windows SSL (Schannel)
+    set(CURL_USE_SCHANNEL ON CACHE BOOL "" FORCE)
+    set(CURL_USE_OPENSSL OFF CACHE BOOL "" FORCE)
+else()
+    # Use OpenSSL on Linux/Unix
+    find_package(OpenSSL REQUIRED)
+endif()
+
 FetchContent_MakeAvailable(cpr)
 
 # stb_image

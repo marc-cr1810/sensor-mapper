@@ -1,6 +1,12 @@
 BUILD_DIR = build
 TARGET_NAME = sensor_mapper
-CORES = $(shell nproc)
+
+# Detect OS for executable extension
+ifeq ($(OS),Windows_NT)
+    EXT = .exe
+else
+    EXT =
+endif
 
 .PHONY: all debug release run clean
 
@@ -8,14 +14,14 @@ all: debug
 
 debug:
 	cmake -B $(BUILD_DIR)/debug -S . -DCMAKE_BUILD_TYPE=Debug
-	cmake --build $(BUILD_DIR)/debug -- -j$(CORES)
+	cmake --build $(BUILD_DIR)/debug --parallel
 
 release:
 	cmake -B $(BUILD_DIR)/release -S . -DCMAKE_BUILD_TYPE=Release
-	cmake --build $(BUILD_DIR)/release -- -j$(CORES)
+	cmake --build $(BUILD_DIR)/release --parallel
 
 run: debug
-	./$(BUILD_DIR)/debug/$(TARGET_NAME)
+	./$(BUILD_DIR)/debug/$(TARGET_NAME)$(EXT)
 
 clean:
-	rm -rf $(BUILD_DIR)
+	cmake -E remove_directory $(BUILD_DIR)

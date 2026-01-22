@@ -1,4 +1,4 @@
-#include "core/building_service.hpp"
+#include "building_service.hpp"
 #include <algorithm>
 #include <cmath>
 #include <cpr/cpr.h>
@@ -400,18 +400,21 @@ auto building_service_t::update() -> bool {
         std::future_status::ready) {
       std::string data = it->data_future.get();
 
-      if (!data.empty()) {
-        auto buildings = m_impl->parse_osm_buildings(data);
-        m_impl->buildings.insert(m_impl->buildings.end(), buildings.begin(),
-                                 buildings.end());
+      // Capture area key before erasing or using (safety)
+      std::string current_key = it->area_key;
 
-        std::cout << "Loaded " << buildings.size()
-                  << " buildings for area: " << it->area_key << std::endl;
+      if (!data.empty()) {
+        auto new_buildings = m_impl->parse_osm_buildings(data);
+        m_impl->buildings.insert(m_impl->buildings.end(), new_buildings.begin(),
+                                 new_buildings.end());
+
+        std::cout << "Loaded " << new_buildings.size()
+                  << " buildings for area: " << current_key << std::endl;
         new_data = true;
       }
 
-      // Mark area as loaded
-      m_impl->loaded_areas[it->area_key] = true;
+      // Mark area as loaded using the local key
+      m_impl->loaded_areas[current_key] = true;
 
       it = m_impl->pending_fetches.erase(it);
     } else {
