@@ -84,6 +84,9 @@ FetchContent_MakeAvailable(json)
 set(SOURCES
     src/main.cpp
     src/core/antenna_pattern.hpp
+    src/core/antenna_pattern_io.hpp
+    src/core/antenna_pattern_library.hpp
+    src/core/antenna_pattern_viz.hpp
     src/core/building_service.cpp
     src/core/building_service.hpp
     src/core/elevation_service.cpp
@@ -105,6 +108,7 @@ set(SOURCES
     src/ui/map_widget.hpp
     src/ui/texture.cpp
     src/ui/texture.hpp
+    src/ui/antenna_pattern_ui.hpp
 )
 
 # Executable

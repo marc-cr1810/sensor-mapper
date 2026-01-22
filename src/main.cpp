@@ -9,11 +9,13 @@
 #include "core/persistence.hpp"
 #include "core/sensor.hpp"
 #include "ui/map_widget.hpp"
+#include "ui/antenna_pattern_ui.hpp"
 
 // Forward declaration
 namespace sensor_mapper {
 void render_ui(map_widget_t &map, std::vector<sensor_t> &sensors,
-               int &selected_index, elevation_service_t &elevation_service);
+               int &selected_index, elevation_service_t &elevation_service,
+               antenna_pattern_ui_state_t &antenna_ui_state);
 }
 
 constexpr const char *SENSORS_FILE = "sensors.json";
@@ -70,6 +72,9 @@ int main(int, char **) {
   // Try loading
   sensor_mapper::persistence::load_sensors(SENSORS_FILE, sensors);
   int selected_sensor_index = 0;
+  
+  // Antenna Pattern UI State
+  sensor_mapper::antenna_pattern_ui_state_t antenna_ui_state;
 
   // Main loop
   while (!glfwWindowShouldClose(window)) {
@@ -86,7 +91,7 @@ int main(int, char **) {
 
     // Core UI Logic
     sensor_mapper::render_ui(map_widget, sensors, selected_sensor_index,
-                             elevation_service);
+                             elevation_service, antenna_ui_state);
 
     // Rendering
     ImGui::Render();
@@ -113,7 +118,8 @@ int main(int, char **) {
 
 namespace sensor_mapper {
 void render_ui(map_widget_t &map, std::vector<sensor_t> &sensors,
-               int &selected_index, elevation_service_t &elevation_service) {
+               int &selected_index, elevation_service_t &elevation_service,
+               antenna_pattern_ui_state_t &antenna_ui_state) {
   // Dockspace
   ImGui::DockSpaceOverViewport(0, ImGui::GetMainViewport());
 
@@ -243,6 +249,42 @@ void render_ui(map_widget_t &map, std::vector<sensor_t> &sensors,
           sensor.set_beamwidth_deg(static_cast<double>(beamwidth));
           sensor_modified = true;
         }
+        
+        // Antenna Pattern Selection
+        ImGui::Separator();
+        auto current_pattern = sensor.get_pattern();
+        if (antenna_pattern_ui_t::render_pattern_selector(current_pattern, antenna_ui_state)) {
+          sensor.set_custom_pattern(current_pattern);
+          sensor_modified = true;
+        }
+        
+        // Display current pattern info
+        if (current_pattern) {
+          ImGui::Indent();
+          ImGui::TextColored(ImVec4(0.7f, 1.0f, 0.7f, 1.0f), "Pattern: %s", 
+                            current_pattern->name.c_str());
+          ImGui::Text("Max Gain: %.1f dBi", current_pattern->max_gain_dbi);
+          ImGui::Text("H. Beamwidth: %.1f°", current_pattern->horizontal_beamwidth_deg);
+          if (current_pattern->is_3d()) {
+            ImGui::Text("V. Beamwidth: %.1f°", current_pattern->vertical_beamwidth_deg);
+          }
+          
+          // Tilt controls if pattern supports it
+          float e_tilt = static_cast<float>(sensor.get_electrical_tilt_deg());
+          if (ImGui::SliderFloat("E-Tilt", &e_tilt, -30.0f, 30.0f, "%.1f°")) {
+            sensor.set_electrical_tilt_deg(static_cast<double>(e_tilt));
+            sensor_modified = true;
+          }
+          
+          float m_tilt = static_cast<float>(sensor.get_mechanical_tilt_deg());
+          if (ImGui::SliderFloat("M-Tilt", &m_tilt, -30.0f, 30.0f, "%.1f°")) {
+            sensor.set_mechanical_tilt_deg(static_cast<double>(m_tilt));
+            sensor_modified = true;
+          }
+          
+          ImGui::Unindent();
+        }
+        ImGui::Separator();
 
         // Propagation Model
         int current_model = static_cast<int>(sensor.get_propagation_model());
@@ -285,7 +327,7 @@ void render_ui(map_widget_t &map, std::vector<sensor_t> &sensors,
           }
         }
       }
-      
+
       // Invalidate RF heatmap if any sensor property was modified
       if (sensor_modified) {
         map.invalidate_rf_heatmap();

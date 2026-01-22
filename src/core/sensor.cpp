@@ -1,4 +1,4 @@
-#include "core/sensor.hpp"
+#include "sensor.hpp"
 
 namespace sensor_mapper {
 
@@ -124,21 +124,20 @@ auto sensor_t::set_custom_pattern(std::shared_ptr<antenna_pattern_t> pattern)
   m_pattern = pattern;
 }
 
+auto sensor_t::get_pattern() const -> std::shared_ptr<antenna_pattern_t> {
+  return m_pattern;
+}
+
 auto sensor_t::get_antenna_gain(double angle_deg) const -> double {
   // If we have a custom pattern, use it
-  if (m_pattern && !m_pattern->gain_db.empty()) {
+  if (m_pattern && !m_pattern->gain_db.empty() && !m_pattern->gain_db[0].empty()) {
     // angle_deg is deviation from North (0-360)
     // We need deviation from Azimuth
     double rel_angle = angle_deg - m_azimuth_deg;
 
-    // Normalize to 0-359 positive integer
-    int idx = static_cast<int>(std::round(rel_angle));
-    while (idx < 0)
-      idx += 360;
-    while (idx >= 360)
-      idx -= 360;
-
-    return m_pattern->gain_db[idx];
+    // Use the new get_gain method with interpolation
+    // Returns gain in dB relative to pattern's max gain
+    return m_pattern->get_gain(static_cast<float>(rel_angle), 0.0f, true);
   }
 
   // Fallback to simple beamwidth model
@@ -150,6 +149,48 @@ auto sensor_t::get_antenna_gain(double angle_deg) const -> double {
   // Here we return ATTENUATION (negative gain) relative to peak.
   // 0.0 means peak gain. -25.0 means side lobe.
   return (angle_diff > m_beamwidth_deg / 2.0) ? -25.0 : 0.0;
+}
+
+auto sensor_t::get_antenna_gain(double azimuth_deg, double elevation_deg) const -> double {
+  // If we have a custom pattern, use it with 3D support
+  if (m_pattern && !m_pattern->gain_db.empty() && !m_pattern->gain_db[0].empty()) {
+    // azimuth_deg is deviation from North (0-360)
+    // We need deviation from Azimuth
+    double rel_angle = azimuth_deg - m_azimuth_deg;
+
+    // Use the new get_gain method with interpolation and elevation support
+    return m_pattern->get_gain(static_cast<float>(rel_angle), 
+                               static_cast<float>(elevation_deg), true);
+  }
+
+  // Fallback to 2D method (ignores elevation)
+  return get_antenna_gain(azimuth_deg);
+}
+
+auto sensor_t::get_electrical_tilt_deg() const -> double {
+  if (m_pattern) {
+    return static_cast<double>(m_pattern->electrical_tilt_deg);
+  }
+  return 0.0;
+}
+
+auto sensor_t::set_electrical_tilt_deg(double tilt) -> void {
+  if (m_pattern) {
+    m_pattern->electrical_tilt_deg = static_cast<float>(tilt);
+  }
+}
+
+auto sensor_t::get_mechanical_tilt_deg() const -> double {
+  if (m_pattern) {
+    return static_cast<double>(m_pattern->mechanical_tilt_deg);
+  }
+  return 0.0;
+}
+
+auto sensor_t::set_mechanical_tilt_deg(double tilt) -> void {
+  if (m_pattern) {
+    m_pattern->mechanical_tilt_deg = static_cast<float>(tilt);
+  }
 }
 
 auto sensor_t::get_propagation_model() const -> PropagationModel {

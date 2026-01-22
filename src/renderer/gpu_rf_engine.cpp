@@ -30,6 +30,8 @@ gpu_rf_engine_t::~gpu_rf_engine_t() {
     glDeleteTextures(1, &m_result_texture);
   if (m_elevation_texture)
     glDeleteTextures(1, &m_elevation_texture);
+  if (m_antenna_pattern_texture)
+    glDeleteTextures(1, &m_antenna_pattern_texture);
   if (m_quad_vao)
     glDeleteVertexArrays(1, &m_quad_vao);
   if (m_quad_vbo)
@@ -140,7 +142,8 @@ precision mediump float;
 out vec4 FragColor;
 in vec2 v_texcoord;
 
-uniform sampler2D u_elevation;
+uniform sampler2D u_elevation_tex;
+uniform sampler2D u_antenna_pattern_tex;
 
 struct Sensor {
     vec2 pos_uv;      // 0-1
@@ -167,7 +170,7 @@ uniform vec2 u_bounds_meters; // Width/Height of map in meters
 uniform float u_min_signal_dbm; // Minimum signal threshold to display
 
 float get_elevation(vec2 uv) {
-    return texture(u_elevation, uv).r;
+    return texture(u_elevation_tex, uv).r;
 }
 
 float calculate_fspl(float d_km, float f_mhz) {
@@ -219,10 +222,16 @@ void main() {
         float angle_deg = degrees(angle_rad);
         if (angle_deg < 0.0) angle_deg += 360.0;
 
-        // Antenna Pattern
-        float angle_diff = abs(angle_deg - azi);
-        if (angle_diff > 180.0) angle_diff = 360.0 - angle_diff;
-        float pattern_loss = (angle_diff > beam/2.0) ? 25.0 : 0.0;
+        // Antenna Pattern - sample from texture
+        float rel_angle = angle_deg - azi;
+        if (rel_angle < 0.0) rel_angle += 360.0;
+        if (rel_angle >= 360.0) rel_angle -= 360.0;
+        
+        // Sample antenna pattern texture (360 degrees x sensors)
+        float pattern_u = rel_angle / 360.0;
+        float pattern_v = (float(i) + 0.5) / 32.0; // 32 = m_max_pattern_sensors
+        float pattern_gain = texture(u_antenna_pattern_tex, vec2(pattern_u, pattern_v)).r;
+        float pattern_loss = -pattern_gain; // Convert gain to loss
         
         // Quick path loss estimation for early culling
         float d_km = dist_m / 1000.0;
@@ -252,7 +261,7 @@ void main() {
             for(int s=1; s<steps; ++s) {
                 float t = float(s) * step_increment;
                 vec2 p_uv = s_uv + diff * t;
-                float p_h = texture(u_elevation, p_uv).r;
+                float p_h = texture(u_elevation_tex, p_uv).r;
                 float r_h = h_tx + t * (h_rx - h_tx);
                 
                 // Check for obstruction with small clearance buffer
@@ -361,10 +370,17 @@ void main() {
     m_shader->set_vec4_array("u_sensor_params_2", count, u_p2.data());
   }
 
+  // Update antenna patterns
+  update_antenna_pattern_texture(sensors);
+
   // Bind Elevation
-  glActiveTexture(GL_TEXTURE0);
+  glActiveTexture(GL_TEXTURE1);
   glBindTexture(GL_TEXTURE_2D, m_elevation_texture);
-  m_shader->set_int("u_elevation", 0);
+  m_shader->set_int("u_elevation_tex", 1);
+
+  glActiveTexture(GL_TEXTURE2);
+  glBindTexture(GL_TEXTURE_2D, m_antenna_pattern_texture);
+  m_shader->set_int("u_antenna_pattern_tex", 2);
 
   // Draw to FBO
   glBindFramebuffer(GL_FRAMEBUFFER, m_fbo);
@@ -380,6 +396,55 @@ void main() {
   m_shader->unbind();
 
   return m_result_texture;
+}
+
+void gpu_rf_engine_t::update_antenna_pattern_texture(const std::vector<sensor_t> &sensors) {
+  // Create texture if it doesn't exist
+  if (m_antenna_pattern_texture == 0) {
+    glGenTextures(1, &m_antenna_pattern_texture);
+    glBindTexture(GL_TEXTURE_2D, m_antenna_pattern_texture);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    std::cout << "[DEBUG] Created antenna pattern texture" << std::endl;
+  }
+
+  // Build pattern data: 360 degrees x m_max_pattern_sensors
+  // Each texel stores the gain in dB (as a float)
+  std::vector<float> pattern_data(360 * m_max_pattern_sensors, 0.0f);
+
+  int num_sensors = std::min((int)sensors.size(), m_max_pattern_sensors);
+  std::cout << "[DEBUG] Uploading patterns for " << num_sensors << " sensors" << std::endl;
+  
+  for (int i = 0; i < num_sensors; ++i) {
+    const auto& sensor = sensors[i];
+    auto pattern = sensor.get_pattern();
+    
+    std::cout << "[DEBUG] Sensor " << i << " has pattern: " 
+              << (pattern ? pattern->name : "NONE") << std::endl;
+    
+    // Sample antenna pattern at each degree
+    float min_gain = 0.0f, max_gain = 0.0f;
+    for (int angle = 0; angle < 360; ++angle) {
+      float gain_db = static_cast<float>(sensor.get_antenna_gain(static_cast<double>(angle)));
+      pattern_data[i * 360 + angle] = gain_db;
+      if (angle == 0 || gain_db < min_gain) min_gain = gain_db;
+      if (angle == 0 || gain_db > max_gain) max_gain = gain_db;
+    }
+    
+    std::cout << "[DEBUG]   Gain range: " << min_gain << " to " << max_gain << " dB" << std::endl;
+    std::cout << "[DEBUG]   Sample gains: 0°=" << pattern_data[i*360 + 0] 
+              << " 90°=" << pattern_data[i*360 + 90]
+              << " 180°=" << pattern_data[i*360 + 180]
+              << " 270°=" << pattern_data[i*360 + 270] << std::endl;
+  }
+
+  // Upload to GPU
+  glBindTexture(GL_TEXTURE_2D, m_antenna_pattern_texture);
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_R32F, 360, m_max_pattern_sensors, 
+               0, GL_RED, GL_FLOAT, pattern_data.data());
+  std::cout << "[DEBUG] Uploaded pattern texture to GPU" << std::endl;
 }
 
 } // namespace sensor_mapper

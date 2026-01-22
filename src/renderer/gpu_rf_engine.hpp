@@ -40,6 +40,10 @@ private:
   int m_elevation_width = 0;
   int m_elevation_height = 0;
 
+  // Texture for uploading Antenna Pattern Data (360 degrees x max_sensors)
+  unsigned int m_antenna_pattern_texture = 0;
+  int m_max_pattern_sensors = 32; // Maximum sensors we can handle patterns for
+
   // Fullscreen Quad
   unsigned int m_quad_vao = 0;
   unsigned int m_quad_vbo = 0;
@@ -48,6 +52,7 @@ private:
   void resize_fbo(int width, int height);
   void update_elevation_texture(elevation_service_t *service, double min_lat,
                                 double max_lat, double min_lon, double max_lon);
+  void update_antenna_pattern_texture(const std::vector<sensor_t> &sensors);
 };
 
 } // namespace sensor_mapper

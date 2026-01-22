@@ -1,6 +1,6 @@
 #pragma once
 
-#include "core/antenna_pattern.hpp"
+#include "antenna_pattern.hpp"
 #include <array>
 #include <memory>
 #include <string>
@@ -72,7 +72,15 @@ public:
   auto set_beamwidth_deg(double beamwidth) -> void;
 
   auto set_custom_pattern(std::shared_ptr<antenna_pattern_t> pattern) -> void;
+  auto get_pattern() const -> std::shared_ptr<antenna_pattern_t>;
   auto get_antenna_gain(double angle_deg) const -> double;
+  auto get_antenna_gain(double azimuth_deg, double elevation_deg) const -> double;
+  
+  // Antenna Tilt Parameters
+  auto get_electrical_tilt_deg() const -> double;
+  auto set_electrical_tilt_deg(double tilt) -> void;
+  auto get_mechanical_tilt_deg() const -> double;
+  auto set_mechanical_tilt_deg(double tilt) -> void;
 
   // Propagation Model
   auto get_propagation_model() const -> PropagationModel;
