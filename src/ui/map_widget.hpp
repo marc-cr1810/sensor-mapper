@@ -46,6 +46,9 @@ public:
   auto get_show_buildings() const -> bool { return m_show_buildings; }
   auto set_show_buildings(bool show) -> void { m_show_buildings = show; }
 
+  auto get_show_heatmap_overlay() const -> bool { return m_show_heatmap_overlay; }
+  auto set_show_heatmap_overlay(bool show) -> void { m_show_heatmap_overlay = show; }
+
   // Mark the RF heatmap as dirty to trigger re-render
   auto invalidate_rf_heatmap() -> void { m_heatmap_dirty = true; }
 
@@ -60,6 +63,7 @@ private:
   bool m_show_rf_gradient; // Show RF signal strength gradient (default: off)
   bool m_show_composite = false;
   bool m_show_buildings = false;
+  bool m_show_heatmap_overlay = true; // Show GPU-rendered coverage overlay
 
   // Smooth zoom/pan state (placeholder for now, using direct integers)
 

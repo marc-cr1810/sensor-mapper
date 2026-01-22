@@ -551,8 +551,8 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors,
         prev_sensor_count = sensors.size();
       }
 
-      // Draw GPU-rendered texture
-      if (m_heatmap_texture_id != 0) {
+      // Draw GPU-rendered texture overlay (if enabled)
+      if (m_heatmap_texture_id != 0 && m_show_heatmap_overlay) {
         draw_list->AddImage(
             (ImTextureID)(intptr_t)m_heatmap_texture_id, canvas_p0,
             ImVec2(canvas_p0.x + canvas_sz.x, canvas_p0.y + canvas_sz.y));

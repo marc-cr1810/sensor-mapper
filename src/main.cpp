@@ -327,6 +327,11 @@ void render_ui(map_widget_t &map, std::vector<sensor_t> &sensors,
       map.set_show_composite(show_composite);
     }
 
+    bool show_heatmap = map.get_show_heatmap_overlay();
+    if (ImGui::Checkbox("Show Coverage Heatmap", &show_heatmap)) {
+      map.set_show_heatmap_overlay(show_heatmap);
+    }
+
     bool show_buildings = map.get_show_buildings();
     if (ImGui::Checkbox("Show 3D Buildings", &show_buildings)) {
       map.set_show_buildings(show_buildings);

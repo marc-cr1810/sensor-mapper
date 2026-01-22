@@ -19,8 +19,8 @@ void main() {
 }
 )";
 
-gpu_rf_engine_t::gpu_rf_engine_t() { 
-  init_gl(); 
+gpu_rf_engine_t::gpu_rf_engine_t() {
+  init_gl();
 }
 
 gpu_rf_engine_t::~gpu_rf_engine_t() {
@@ -143,9 +143,9 @@ uniform sampler2D u_elevation;
 struct Sensor {
     vec2 pos_uv;      // 0-1
     float range_m;    // Range in meters
-    float power_dbm;  
+    float power_dbm;
     float freq_mhz;
-    float azimuth_deg; 
+    float azimuth_deg;
     float beamwidth_deg;
     float gain_dbi;
     float mast_height;
@@ -162,6 +162,7 @@ uniform vec4 u_sensor_params_1[MAX_SENSORS];  // x=pwr, y=freq, z=azi, w=beam
 uniform vec4 u_sensor_params_2[MAX_SENSORS];  // x=gain, y=mast, z=ground, w=model
 
 uniform vec2 u_bounds_meters; // Width/Height of map in meters
+uniform float u_min_signal_dbm; // Minimum signal threshold to display
 
 float get_elevation(vec2 uv) {
     return texture(u_elevation, uv).r;
@@ -177,29 +178,29 @@ float calculate_hata(float d_km, float f_mhz, float h_tx, float h_rx) {
    float log_f = log(f_mhz)/log(10.0);
    float log_h = log(max(1.0, h_tx))/log(10.0);
    float log_d = log(d_km)/log(10.0);
-   
+
    float a_h_rx = (1.1 * log_f - 0.7)*h_rx - (1.56*log_f - 0.8);
    return 69.55 + 26.16*log_f - 13.82*log_h - a_h_rx + (44.9 - 6.55*log_h)*log_d;
 }
 
 void main() {
     float my_elev = get_elevation(v_texcoord);
-    float h_rx = 2.0 + my_elev; 
-    
+    float h_rx = 2.0 + my_elev;
+
     float max_dbm = -200.0;
-    
+
     for(int i=0; i<MAX_SENSORS; ++i) {
         if (i >= u_sensor_count) break;
-        
+
         vec2 s_uv = u_sensor_pos_range[i].xy;
         float s_range = u_sensor_pos_range[i].z;
-        
+
         vec2 diff = (v_texcoord - s_uv);
         vec2 diff_m = diff * u_bounds_meters;
         float dist_m = length(diff_m);
-        
+
         if (dist_m > s_range) continue;
-        
+
         float tx_pwr = u_sensor_params_1[i].x;
         float freq   = u_sensor_params_1[i].y;
         float azi    = u_sensor_params_1[i].z;
@@ -208,45 +209,45 @@ void main() {
         float mast   = u_sensor_params_2[i].y;
         float ground = u_sensor_params_2[i].z;
         int   model  = int(u_sensor_params_2[i].w);
-        
+
         float angle_rad = atan(diff_m.x, diff_m.y);
         float angle_deg = degrees(angle_rad);
         if (angle_deg < 0.0) angle_deg += 360.0;
-        
+
         // Antenna Pattern
         float angle_diff = abs(angle_deg - azi);
         if (angle_diff > 180.0) angle_diff = 360.0 - angle_diff;
         float pattern_loss = (angle_diff > beam/2.0) ? 25.0 : 0.0;
-        
+
         // LOS Check (Raymarch)
         float diffraction_loss = 0.0;
         int steps = 25;
         float h_tx = mast + ground;
-        
+
         for(int s=1; s<steps; ++s) {
             float t = float(s)/float(steps);
             vec2 p_uv = s_uv + diff * t;
             float p_h = texture(u_elevation, p_uv).r;
             float r_h = h_tx + t * (h_rx - h_tx);
             if (p_h > r_h) {
-                diffraction_loss = 30.0; 
+                diffraction_loss = 30.0;
                 break;
             }
         }
-        
+
         // Path Loss
         float d_km = dist_m / 1000.0;
         float loss = 0.0;
         if (model == 0) loss = calculate_fspl(d_km, freq);
         else loss = calculate_hata(d_km, freq, h_tx, 2.0);
-        
+
         float rx = tx_pwr + gain - loss - pattern_loss - diffraction_loss;
         max_dbm = max(max_dbm, rx);
     }
-    
+
     // Coloring
     vec4 col = vec4(0.0);
-    if (max_dbm > -150.0) {
+    if (max_dbm > u_min_signal_dbm) {
         if (max_dbm >= -60.0) col = vec4(0.0, 1.0, 0.0, 0.8);
         else if (max_dbm >= -80.0) col = mix(vec4(1.0, 1.0, 0.0, 0.7), vec4(0.0, 1.0, 0.0, 0.8), (max_dbm+80.0)/20.0);
         else if (max_dbm >= -100.0) col = mix(vec4(1.0, 0.0, 0.0, 0.5), vec4(1.0, 1.0, 0.0, 0.7), (max_dbm+100.0)/20.0);
@@ -268,6 +269,7 @@ void main() {
   double height_m = (max_lat - min_lat) * 111000.0;
   double width_m = (max_lon - min_lon) * 111000.0 * std::cos(mid_lat * 3.14159 / 180.0);
   m_shader->set_vec2("u_bounds_meters", (float)width_m, (float)height_m);
+  m_shader->set_float("u_min_signal_dbm", -100.0f);  // Hide weak signals below -100 dBm
 
   // Upload Sensors
   int count = 0;
