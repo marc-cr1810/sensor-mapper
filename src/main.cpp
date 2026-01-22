@@ -291,9 +291,21 @@ void render_ui(map_widget_t &map, std::vector<sensor_t> &sensors,
 
   if (ImGui::Begin("Map View")) {
     // RF Gradient Toggle
-    ImGui::Checkbox("Show RF Signal Gradient", &map.m_show_rf_gradient);
-    ImGui::Checkbox("Show Composite Coverage", &map.m_show_composite);
-    ImGui::Checkbox("Show 3D Buildings", &map.m_show_buildings);
+    // RF Gradient Toggle
+    bool show_rf = map.get_show_rf_gradient();
+    if (ImGui::Checkbox("Show RF Signal Gradient", &show_rf)) {
+      map.set_show_rf_gradient(show_rf);
+    }
+
+    bool show_composite = map.get_show_composite();
+    if (ImGui::Checkbox("Show Composite Coverage", &show_composite)) {
+      map.set_show_composite(show_composite);
+    }
+
+    bool show_buildings = map.get_show_buildings();
+    if (ImGui::Checkbox("Show 3D Buildings", &show_buildings)) {
+      map.set_show_buildings(show_buildings);
+    }
 
     map.draw(sensors, selected_index, elevation_service,
              [&](double lat, double lon) {

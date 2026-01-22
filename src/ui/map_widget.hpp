@@ -36,9 +36,14 @@ public:
   auto get_mouse_lat() const -> double { return m_mouse_lat; }
   auto get_mouse_lon() const -> double { return m_mouse_lon; }
 
-  bool m_show_rf_gradient; // Show RF signal strength gradient (default: off)
-  bool m_show_composite = false;
-  bool m_show_buildings = false;
+  auto get_show_rf_gradient() const -> bool { return m_show_rf_gradient; }
+  auto set_show_rf_gradient(bool show) -> void { m_show_rf_gradient = show; }
+
+  auto get_show_composite() const -> bool { return m_show_composite; }
+  auto set_show_composite(bool show) -> void { m_show_composite = show; }
+
+  auto get_show_buildings() const -> bool { return m_show_buildings; }
+  auto set_show_buildings(bool show) -> void { m_show_buildings = show; }
 
 private:
   double m_center_lat;
@@ -47,6 +52,10 @@ private:
 
   double m_mouse_lat = 0.0;
   double m_mouse_lon = 0.0;
+
+  bool m_show_rf_gradient; // Show RF signal strength gradient (default: off)
+  bool m_show_composite = false;
+  bool m_show_buildings = false;
 
   // Smooth zoom/pan state (placeholder for now, using direct integers)
 

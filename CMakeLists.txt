@@ -8,6 +8,13 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 add_compile_definitions(_USE_MATH_DEFINES)
 add_compile_definitions(NOMINMAX)
 
+# Compiler Warnings
+if(MSVC)
+    add_compile_options(/W4)
+else()
+    add_compile_options(-Wall -Wextra -Wpedantic)
+endif()
+
 # Dependencies
 include(FetchContent)
 
@@ -33,8 +40,7 @@ FetchContent_Declare(
     GIT_REPOSITORY https://github.com/libcpr/cpr.git
     GIT_TAG        1.10.4
 )
-# CPR options to minimize build time/deps if needed, but defaults are usually fine for desktop
-# Build curl from source
+# CPR options to minimize build time/deps
 set(CPR_USE_SYSTEM_CURL OFF CACHE BOOL "" FORCE)
 set(CPR_ENABLE_SSL ON CACHE BOOL "" FORCE)
 set(OPENSSL_USE_STATIC_LIBS OFF)
@@ -67,9 +73,23 @@ FetchContent_Declare(
 FetchContent_MakeAvailable(json)
 
 # Source Files
-file(GLOB_RECURSE SOURCES 
-    "src/*.cpp"
-    "src/*.hpp"
+set(SOURCES
+    src/main.cpp
+    src/core/building_service.cpp
+    src/core/building_service.hpp
+    src/core/elevation_service.cpp
+    src/core/elevation_service.hpp
+    src/core/geo_math.hpp
+    src/core/persistence.cpp
+    src/core/persistence.hpp
+    src/core/sensor.cpp
+    src/core/sensor.hpp
+    src/core/tile_service.cpp
+    src/core/tile_service.hpp
+    src/ui/map_widget.cpp
+    src/ui/map_widget.hpp
+    src/ui/texture.cpp
+    src/ui/texture.hpp
 )
 
 # Executable
@@ -107,5 +127,3 @@ if(WIN32)
 elseif(UNIX AND NOT APPLE)
     target_link_libraries(sensor_mapper PRIVATE GL)
 endif()
-
-# Copy assets if we had any (none yet)
