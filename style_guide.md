@@ -35,30 +35,30 @@ This guide describes the conventions and best practices for writing C++ code in 
 
 ## Formatting
 
-- **Indentation:** Use 4 spaces per level. No tabs.
+- **Indentation:** Use 2 spaces per level. No tabs.
 - **Braces:** Place opening braces on a new line for all control statements (`if`, `for`, `while`, `switch`, `class`, `struct`, etc.).
   ```cpp
   if (condition)
   {
-      // code
+    // code
   }
 
   for (int i = 0; i < 10; ++i)
   {
-      // code
+    // code
   }
 
   while (running)
   {
-      // code
+    // code
   }
 
   class example_class_t
   {
-      // code
+    // code
   }
   ```
-- **Line Length:** Prefer lines under 120 characters.
+- **Line Length:** Prefer lines under 240 characters.
 - **Spacing:** Use spaces around operators and after commas.
   ```cpp
   int sum = a + b;
@@ -94,18 +94,18 @@ namespace sensor_mapper
 class example_class_t
 {
 public:
-    // Functions
-    example_class_t(const std::string& name, int value);
-    auto get_name() const -> const std::string&;
-    auto set_name(const std::string& name) -> void;
-    auto get_value() const -> int;
-    auto set_value(int value) -> void;
-    auto print_info() const -> void;
+  // Functions
+  example_class_t(const std::string& name, int value);
+  auto get_name() const -> const std::string&;
+  auto set_name(const std::string& name) -> void;
+  auto get_value() const -> int;
+  auto set_value(int value) -> void;
+  auto print_info() const -> void;
 
 private:
-    // Variables
-    std::string m_name;
-    int m_value;
+  // Variables
+  std::string m_name;
+  int m_value;
 };
 
 } // namespace sensor_mapper
@@ -121,33 +121,33 @@ namespace sensor_mapper
 {
 
 example_class_t::example_class_t(const std::string& name, int value)
-    : m_name(name), m_value(value)
+  : m_name(name), m_value(value)
 {
 }
 
 auto example_class_t::get_name() const -> const std::string&
 {
-    return m_name;
+  return m_name;
 }
 
 auto example_class_t::set_name(const std::string& name) -> void
 {
-    m_name = name;
+  m_name = name;
 }
 
 auto example_class_t::get_value() const -> int
 {
-    return m_value;
+  return m_value;
 }
 
 auto example_class_t::set_value(int value) -> void
 {
-    m_value = value;
+  m_value = value;
 }
 
 auto example_class_t::print_info() const -> void
 {
-    std::cout << "Name: " << m_name << ", Value: " << m_value << std::endl;
+  std::cout << "Name: " << m_name << ", Value: " << m_value << std::endl;
 }
 
 } // namespace sensor_mapper

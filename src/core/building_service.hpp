@@ -4,19 +4,30 @@
 #include <string>
 #include <vector>
 
-namespace sensor_mapper {
+namespace sensor_mapper
+{
 
 // Building material types for attenuation calculation
-enum class material_type_e { UNKNOWN, CONCRETE, BRICK, WOOD, GLASS, METAL };
+enum class material_type_e
+{
+  UNKNOWN,
+  CONCRETE,
+  BRICK,
+  WOOD,
+  GLASS,
+  METAL
+};
 
 // Geographic point
-struct geo_point_t {
+struct geo_point_t
+{
   double lat;
   double lon;
 };
 
 // Building structure
-struct building_t {
+struct building_t
+{
   std::vector<geo_point_t> footprint; // Polygon vertices (lat/lon)
   double height_m;                    // Building height in meters
   material_type_e material;
@@ -24,7 +35,8 @@ struct building_t {
 };
 
 // Building intersection result
-struct building_intersection_t {
+struct building_intersection_t
+{
   building_t *building;
   geo_point_t entry_point;
   geo_point_t exit_point;
@@ -32,27 +44,23 @@ struct building_intersection_t {
   double incident_angle_deg; // Angle of ray vs building wall
 };
 
-class building_service_t {
+class building_service_t
+{
 public:
   building_service_t();
   ~building_service_t();
 
   // Fetch buildings in bounding box (async)
-  auto fetch_buildings(double min_lat, double max_lat, double min_lon,
-                       double max_lon) -> void;
+  auto fetch_buildings(double min_lat, double max_lat, double min_lon, double max_lon) -> void;
 
   // Check if buildings are loaded for area
-  auto has_buildings_for_area(double min_lat, double max_lat, double min_lon,
-                              double max_lon) const -> bool;
+  auto has_buildings_for_area(double min_lat, double max_lat, double min_lon, double max_lon) const -> bool;
 
   // Get all buildings within a bounding box
-  auto get_buildings_in_area(double min_lat, double max_lat, double min_lon,
-                             double max_lon) const
-      -> std::vector<const building_t *>;
+  auto get_buildings_in_area(double min_lat, double max_lat, double min_lon, double max_lon) const -> std::vector<const building_t *>;
 
   // Get buildings intersecting a ray path
-  auto get_buildings_on_path(geo_point_t start, geo_point_t end) const
-      -> std::vector<building_intersection_t>;
+  auto get_buildings_on_path(geo_point_t start, geo_point_t end) const -> std::vector<building_intersection_t>;
 
   // Get building at specific location (for sensor placement)
   // Returns nullptr if no building found

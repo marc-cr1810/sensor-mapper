@@ -9,7 +9,8 @@
 
 namespace fs = std::filesystem;
 
-namespace sensor_mapper {
+namespace sensor_mapper
+{
 
 // Terrarium tiles are usually 256x256
 constexpr int TILE_SIZE = 256;
@@ -17,15 +18,20 @@ constexpr int TILE_SIZE = 256;
 // size)
 constexpr int ELEVATION_ZOOM = 12;
 
-elevation_service_t::elevation_service_t() {}
-elevation_service_t::~elevation_service_t() {}
+elevation_service_t::elevation_service_t()
+{
+}
+elevation_service_t::~elevation_service_t()
+{
+}
 
-auto elevation_service_t::make_key(int z, int x, int y) -> tile_key_t {
+auto elevation_service_t::make_key(int z, int x, int y) -> tile_key_t
+{
   return std::format("{}/{}/{}", z, x, y);
 }
 
-auto elevation_service_t::get_elevation(double lat, double lon,
-                                        float &out_height) -> bool {
+auto elevation_service_t::get_elevation(double lat, double lon, float &out_height) -> bool
+{
   double wx, wy;
   geo::lat_lon_to_world(lat, lon, wx, wy);
 
@@ -36,7 +42,8 @@ auto elevation_service_t::get_elevation(double lat, double lon,
   auto it = m_cache.find(key);
 
   // If tile exists and is valid
-  if (it != m_cache.end() && it->second->valid) {
+  if (it != m_cache.end() && it->second->valid)
+  {
     // Calculate sub-tile position
     double n = static_cast<double>(1 << ELEVATION_ZOOM);
     double tile_x_float = wx * n - tx;
@@ -56,7 +63,8 @@ auto elevation_service_t::get_elevation(double lat, double lon,
       py = TILE_SIZE - 1;
 
     int idx = py * TILE_SIZE + px;
-    if (static_cast<size_t>(idx) < it->second->heights.size()) {
+    if (static_cast<size_t>(idx) < it->second->heights.size())
+    {
       out_height = it->second->heights[idx];
       return true;
     }
@@ -64,25 +72,29 @@ auto elevation_service_t::get_elevation(double lat, double lon,
 
   // If not found or loading, ensure it's being fetched
   bool is_loading = false;
-  for (const auto &k : m_loading_keys) {
-    if (k == key) {
+  for (const auto &k : m_loading_keys)
+  {
+    if (k == key)
+    {
       is_loading = true;
       break;
     }
   }
 
-  if (!is_loading) {
+  if (!is_loading)
+  {
     // Check disk cache first
     auto key = make_key(ELEVATION_ZOOM, tx, ty);
-    fs::path cache_file = fs::path("cache/elevation") /
-                          std::format("{}_{}_{}.png", ELEVATION_ZOOM, tx, ty);
+    fs::path cache_file = fs::path("cache/elevation") / std::format("{}_{}_{}.png", ELEVATION_ZOOM, tx, ty);
 
-    if (fs::exists(cache_file)) {
+    if (fs::exists(cache_file))
+    {
       // Load from disk immediately (synchronous for simplicity, or could be
       // async)
       std::ifstream f(cache_file, std::ios::binary);
       std::vector<char> buffer(std::istreambuf_iterator<char>(f), {});
-      if (!buffer.empty()) {
+      if (!buffer.empty())
+      {
         std::string data(buffer.begin(), buffer.end());
 
         // Process immediately
@@ -92,13 +104,13 @@ auto elevation_service_t::get_elevation(double lat, double lon,
         tile->y = ty;
 
         int width, height, channels;
-        unsigned char *img_data = stbi_load_from_memory(
-            reinterpret_cast<const unsigned char *>(data.data()),
-            static_cast<int>(data.size()), &width, &height, &channels, 0);
+        unsigned char *img_data = stbi_load_from_memory(reinterpret_cast<const unsigned char *>(data.data()), static_cast<int>(data.size()), &width, &height, &channels, 0);
 
-        if (img_data) {
+        if (img_data)
+        {
           tile->heights.resize(width * height);
-          for (int i = 0; i < width * height; i++) {
+          for (int i = 0; i < width * height; i++)
+          {
             int r = img_data[i * channels + 0];
             int g = img_data[i * channels + 1];
             int b = img_data[i * channels + 2];
@@ -127,44 +139,50 @@ auto elevation_service_t::get_elevation(double lat, double lon,
   return false;
 }
 
-auto elevation_service_t::fetch_tile(int z, int x, int y) -> void {
+auto elevation_service_t::fetch_tile(int z, int x, int y) -> void
+{
   auto key = make_key(z, x, y);
   m_loading_keys.push_back(key);
 
   // Mapzen Terrarium format (hosted on AWS)
   // https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png
-  std::string url = std::format(
-      "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{}/{}/{}.png", z,
-      x, y);
+  std::string url = std::format("https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{}/{}/{}.png", z, x, y);
 
-  fs::path cache_file =
-      fs::path("cache/elevation") / std::format("{}_{}_{}.png", z, x, y);
+  fs::path cache_file = fs::path("cache/elevation") / std::format("{}_{}_{}.png", z, x, y);
   std::string save_path = cache_file.string();
 
-  m_pending.push_back(
-      {z, x, y, std::async(std::launch::async, [url, save_path]() {
-         cpr::Response r = cpr::Get(cpr::Url{url});
-         if (r.status_code == 200) {
-           // Save to disk
-           try {
-             fs::path p(save_path);
-             fs::create_directories(p.parent_path());
-             std::ofstream f(p, std::ios::binary);
-             f.write(r.text.data(), r.text.size());
-           } catch (...) {
-           }
-           return r.text;
-         }
-         return std::string();
-       })});
+  m_pending.push_back({z, x, y,
+                       std::async(std::launch::async,
+                                  [url, save_path]()
+                                  {
+                                    cpr::Response r = cpr::Get(cpr::Url{url});
+                                    if (r.status_code == 200)
+                                    {
+                                      // Save to disk
+                                      try
+                                      {
+                                        fs::path p(save_path);
+                                        fs::create_directories(p.parent_path());
+                                        std::ofstream f(p, std::ios::binary);
+                                        f.write(r.text.data(), r.text.size());
+                                      }
+                                      catch (...)
+                                      {
+                                      }
+                                      return r.text;
+                                    }
+                                    return std::string();
+                                  })});
 }
 
-auto elevation_service_t::update() -> void {
+auto elevation_service_t::update() -> void
+{
   std::scoped_lock lock(m_mutex);
   auto it = m_pending.begin();
-  while (it != m_pending.end()) {
-    if (it->data_future.wait_for(std::chrono::seconds(0)) ==
-        std::future_status::ready) {
+  while (it != m_pending.end())
+  {
+    if (it->data_future.wait_for(std::chrono::seconds(0)) == std::future_status::ready)
+    {
       std::string data = it->data_future.get();
       auto key = make_key(it->z, it->x, it->y);
 
@@ -176,16 +194,17 @@ auto elevation_service_t::update() -> void {
       tile->x = it->x;
       tile->y = it->y;
 
-      if (!data.empty()) {
+      if (!data.empty())
+      {
         int width, height, channels;
         // Decode PNG from memory
-        unsigned char *img_data = stbi_load_from_memory(
-            reinterpret_cast<const unsigned char *>(data.data()),
-            static_cast<int>(data.size()), &width, &height, &channels, 0);
+        unsigned char *img_data = stbi_load_from_memory(reinterpret_cast<const unsigned char *>(data.data()), static_cast<int>(data.size()), &width, &height, &channels, 0);
 
-        if (img_data) {
+        if (img_data)
+        {
           tile->heights.resize(width * height);
-          for (int i = 0; i < width * height; i++) {
+          for (int i = 0; i < width * height; i++)
+          {
             // Mapzen Terrarium encoding:
             // meters = (r * 256 + g + b / 256) - 32768
             // channels usually 3 or 4
@@ -203,7 +222,9 @@ auto elevation_service_t::update() -> void {
 
       m_cache[key] = tile;
       it = m_pending.erase(it);
-    } else {
+    }
+    else
+    {
       ++it;
     }
   }

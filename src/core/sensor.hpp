@@ -5,20 +5,21 @@
 #include <memory>
 #include <string>
 
+namespace sensor_mapper
+{
 
-namespace sensor_mapper {
-
-enum class PropagationModel {
+enum class PropagationModel
+{
   FreeSpace = 0,
   HataUrban = 1,
   HataSuburban = 2,
   HataRural = 3
 };
 
-class sensor_t {
+class sensor_t
+{
 public:
-  sensor_t(const std::string &name, double latitude, double longitude,
-           double range);
+  sensor_t(const std::string &name, double latitude, double longitude, double range);
   ~sensor_t() = default;
 
   auto get_name() const -> const std::string &;
@@ -75,7 +76,7 @@ public:
   auto get_pattern() const -> std::shared_ptr<antenna_pattern_t>;
   auto get_antenna_gain(double angle_deg) const -> double;
   auto get_antenna_gain(double azimuth_deg, double elevation_deg) const -> double;
-  
+
   // Antenna Tilt Parameters
   auto get_electrical_tilt_deg() const -> double;
   auto set_electrical_tilt_deg(double tilt) -> void;

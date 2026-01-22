@@ -3,10 +3,11 @@
 #include <string>
 #include <vector>
 
+namespace sensor_mapper
+{
 
-namespace sensor_mapper {
-
-class texture_t {
+class texture_t
+{
 public:
   texture_t();
   ~texture_t();

@@ -8,10 +8,11 @@
 #include <memory>
 #include <vector>
 
+namespace sensor_mapper
+{
 
-namespace sensor_mapper {
-
-class gpu_rf_engine_t {
+class gpu_rf_engine_t
+{
 public:
   gpu_rf_engine_t();
   ~gpu_rf_engine_t();
@@ -20,11 +21,8 @@ public:
   // We don't return a std::future<coverage_grid> because the result stays on
   // GPU. If we need the CPU data (e.g. for inspection), we'd need glGetTexImage
   // (slow). For visualization, we just need the texture ID.
-  auto render(const std::vector<sensor_t> &sensors,
-              elevation_service_t *elevation_service, double min_lat,
-              double max_lat, double min_lon, double max_lon,
-              float min_signal_dbm = -90.0f)
-      -> unsigned int; // returns Texture ID
+  auto render(const std::vector<sensor_t> &sensors, elevation_service_t *elevation_service, double min_lat, double max_lat, double min_lon, double max_lon,
+              float min_signal_dbm = -90.0f) -> unsigned int; // returns Texture ID
 
 private:
   std::unique_ptr<shader_t> m_shader;
@@ -50,8 +48,7 @@ private:
 
   void init_gl();
   void resize_fbo(int width, int height);
-  void update_elevation_texture(elevation_service_t *service, double min_lat,
-                                double max_lat, double min_lon, double max_lon);
+  void update_elevation_texture(elevation_service_t *service, double min_lat, double max_lat, double min_lon, double max_lon);
   void update_antenna_pattern_texture(const std::vector<sensor_t> &sensors);
 };
 

@@ -7,9 +7,11 @@
 #include <memory>
 #include <vector>
 
-namespace sensor_mapper {
+namespace sensor_mapper
+{
 
-struct coverage_grid_t {
+struct coverage_grid_t
+{
   int width;
   int height;
   double min_lat;
@@ -19,23 +21,19 @@ struct coverage_grid_t {
   std::vector<float> signal_dbm; // Flattened 2D array
 };
 
-class rf_engine_t {
+class rf_engine_t
+{
 public:
   rf_engine_t();
   ~rf_engine_t();
 
   // Async coverage calculation
-  auto compute_coverage(const std::vector<sensor_t> &sensors,
-                        elevation_service_t *elevation_service, double min_lat,
-                        double max_lat, double min_lon, double max_lon,
-                        int width, int height)
-      -> std::future<std::shared_ptr<coverage_grid_t>>;
+  auto compute_coverage(const std::vector<sensor_t> &sensors, elevation_service_t *elevation_service, double min_lat, double max_lat, double min_lon, double max_lon, int width, int height) -> std::future<std::shared_ptr<coverage_grid_t>>;
 
   // Propagation Models
   static auto calculate_fspl(double d_km, double f_mhz) -> double;
 
-  static auto calculate_hata(double d_km, double f_mhz, double h_tx,
-                             double h_rx, PropagationModel model) -> double;
+  static auto calculate_hata(double d_km, double f_mhz, double h_tx, double h_rx, PropagationModel model) -> double;
 
 private:
   struct impl_t;

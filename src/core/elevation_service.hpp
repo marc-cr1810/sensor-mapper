@@ -7,17 +7,19 @@
 #include <string>
 #include <vector>
 
-
-namespace sensor_mapper {
+namespace sensor_mapper
+{
 
 // Stores raw elevation data for a tile (256x256 typically)
-struct elevation_tile_t {
+struct elevation_tile_t
+{
   int z, x, y;
   std::vector<float> heights; // Row-major, 256x256
   bool valid = false;
 };
 
-class elevation_service_t {
+class elevation_service_t
+{
 public:
   elevation_service_t();
   ~elevation_service_t();
@@ -32,7 +34,8 @@ public:
 private:
   using tile_key_t = std::string;
 
-  struct pending_fetch_t {
+  struct pending_fetch_t
+  {
     int z, x, y;
     std::future<std::string> data_future;
   };

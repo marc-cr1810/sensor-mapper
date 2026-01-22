@@ -4,9 +4,11 @@
 #include <string>
 #include <unordered_map>
 
-namespace sensor_mapper {
+namespace sensor_mapper
+{
 
-class shader_t {
+class shader_t
+{
 public:
   shader_t(const std::string &vertex_src, const std::string &fragment_src);
   ~shader_t();
@@ -24,7 +26,10 @@ public:
   void set_float_array(const std::string &name, int count, const float *values);
   void set_vec4_array(const std::string &name, int count, const float *values);
 
-  bool is_valid() const { return m_renderer_id != 0; }
+  bool is_valid() const
+  {
+    return m_renderer_id != 0;
+  }
 
 private:
   unsigned int m_renderer_id;

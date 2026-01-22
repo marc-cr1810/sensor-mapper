@@ -6,7 +6,8 @@
 #include <iostream>
 #include <vector>
 
-namespace sensor_mapper {
+namespace sensor_mapper
+{
 
 static const char *VERTEX_SHADER = R"(
 #version 130
@@ -19,11 +20,13 @@ void main() {
 }
 )";
 
-gpu_rf_engine_t::gpu_rf_engine_t() {
+gpu_rf_engine_t::gpu_rf_engine_t()
+{
   init_gl();
 }
 
-gpu_rf_engine_t::~gpu_rf_engine_t() {
+gpu_rf_engine_t::~gpu_rf_engine_t()
+{
   if (m_fbo)
     glDeleteFramebuffers(1, &m_fbo);
   if (m_result_texture)
@@ -38,11 +41,11 @@ gpu_rf_engine_t::~gpu_rf_engine_t() {
     glDeleteBuffers(1, &m_quad_vbo);
 }
 
-void gpu_rf_engine_t::init_gl() {
+void gpu_rf_engine_t::init_gl()
+{
   // Quad
   float vertices[] = {// Pos        // Tex
-                      -1.0f, -1.0f, 0.0f, 0.0f, 1.0f,  -1.0f, 1.0f, 0.0f,
-                      1.0f,  1.0f,  1.0f, 1.0f, -1.0f, 1.0f,  0.0f, 1.0f};
+                      -1.0f, -1.0f, 0.0f, 0.0f, 1.0f, -1.0f, 1.0f, 0.0f, 1.0f, 1.0f, 1.0f, 1.0f, -1.0f, 1.0f, 0.0f, 1.0f};
 
   glGenVertexArrays(1, &m_quad_vao);
   glBindVertexArray(m_quad_vao);
@@ -54,8 +57,7 @@ void gpu_rf_engine_t::init_gl() {
   // Attribs
   glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void *)0);
   glEnableVertexAttribArray(0);
-  glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float),
-                        (void *)(2 * sizeof(float)));
+  glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float), (void *)(2 * sizeof(float)));
   glEnableVertexAttribArray(1);
 
   glBindVertexArray(0);
@@ -69,7 +71,8 @@ void gpu_rf_engine_t::init_gl() {
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 }
 
-void gpu_rf_engine_t::resize_fbo(int width, int height) {
+void gpu_rf_engine_t::resize_fbo(int width, int height)
+{
   if (m_fbo_width == width && m_fbo_height == height && m_fbo != 0)
     return;
 
@@ -83,13 +86,11 @@ void gpu_rf_engine_t::resize_fbo(int width, int height) {
   if (m_result_texture == 0)
     glGenTextures(1, &m_result_texture);
   glBindTexture(GL_TEXTURE_2D, m_result_texture);
-  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA,
-               GL_UNSIGNED_BYTE, nullptr);
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
 
-  glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
-                         m_result_texture, 0);
+  glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_result_texture, 0);
 
   if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
     std::cerr << "GPU RF Engine: Framebuffer not complete!" << std::endl;
@@ -97,19 +98,20 @@ void gpu_rf_engine_t::resize_fbo(int width, int height) {
   glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
-void gpu_rf_engine_t::update_elevation_texture(elevation_service_t *service,
-                                               double min_lat, double max_lat,
-                                               double min_lon, double max_lon) {
+void gpu_rf_engine_t::update_elevation_texture(elevation_service_t *service, double min_lat, double max_lat, double min_lon, double max_lon)
+{
   // Use lower resolution for elevation texture to reduce memory and sampling cost
   int w = 128;
   int h = 128;
 
   std::vector<float> data(w * h);
 
-  for (int y = 0; y < h; ++y) {
+  for (int y = 0; y < h; ++y)
+  {
     double t = (double)y / (h - 1);
     double lat = min_lat + t * (max_lat - min_lat);
-    for (int x = 0; x < w; ++x) {
+    for (int x = 0; x < w; ++x)
+    {
       double u = (double)x / (w - 1);
       double lon = min_lon + u * (max_lon - min_lon);
 
@@ -123,18 +125,15 @@ void gpu_rf_engine_t::update_elevation_texture(elevation_service_t *service,
   }
 
   glBindTexture(GL_TEXTURE_2D, m_elevation_texture);
-  glTexImage2D(GL_TEXTURE_2D, 0, GL_R32F, w, h, 0, GL_RED, GL_FLOAT,
-               data.data());
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_R32F, w, h, 0, GL_RED, GL_FLOAT, data.data());
 }
 
-auto gpu_rf_engine_t::render(const std::vector<sensor_t> &sensors,
-                             elevation_service_t *service, double min_lat,
-                             double max_lat, double min_lon, double max_lon,
-                             float min_signal_dbm)
-    -> unsigned int {
+auto gpu_rf_engine_t::render(const std::vector<sensor_t> &sensors, elevation_service_t *service, double min_lat, double max_lat, double min_lon, double max_lon, float min_signal_dbm) -> unsigned int
+{
 
   // Lazy load shader
-  if (!m_shader) {
+  if (!m_shader)
+  {
     const char *FRAG_SRC = R"(
 #version 130
 precision mediump float;
@@ -297,15 +296,20 @@ void main() {
   // Reduce resolution for larger areas to improve performance
   double area_deg = (max_lat - min_lat) * (max_lon - min_lon);
   int resolution = 512;
-  
-  if (area_deg > 1.0) {
-    resolution = 256;  // Large area - use lower resolution
-  } else if (area_deg > 0.1) {
-    resolution = 384;  // Medium area
-  } else if (area_deg < 0.01) {
-    resolution = 768;  // Very zoomed in - use higher resolution
+
+  if (area_deg > 1.0)
+  {
+    resolution = 256; // Large area - use lower resolution
   }
-  
+  else if (area_deg > 0.1)
+  {
+    resolution = 384; // Medium area
+  }
+  else if (area_deg < 0.01)
+  {
+    resolution = 768; // Very zoomed in - use higher resolution
+  }
+
   resize_fbo(resolution, resolution);
   update_elevation_texture(service, min_lat, max_lat, min_lon, max_lon);
 
@@ -316,36 +320,40 @@ void main() {
   double height_m = (max_lat - min_lat) * 111000.0;
   double width_m = (max_lon - min_lon) * 111000.0 * std::cos(mid_lat * 3.14159 / 180.0);
   m_shader->set_vec2("u_bounds_meters", (float)width_m, (float)height_m);
-  m_shader->set_float("u_min_signal_dbm", min_signal_dbm);  // User-adjustable minimum signal threshold
+  m_shader->set_float("u_min_signal_dbm", min_signal_dbm); // User-adjustable minimum signal threshold
 
   // Upload Sensors - Sort by power for better early termination
   // Create indices sorted by transmit power (strongest first)
   std::vector<size_t> sensor_indices(sensors.size());
-  for (size_t i = 0; i < sensors.size(); ++i) {
+  for (size_t i = 0; i < sensors.size(); ++i)
+  {
     sensor_indices[i] = i;
   }
-  
+
   // Sort indices by transmit power + gain (descending)
-  std::sort(sensor_indices.begin(), sensor_indices.end(), 
-    [&sensors](size_t a, size_t b) {
-      double power_a = sensors[a].get_tx_power_dbm() + sensors[a].get_tx_antenna_gain_dbi();
-      double power_b = sensors[b].get_tx_power_dbm() + sensors[b].get_tx_antenna_gain_dbi();
-      return power_a > power_b;  // Strongest first
-    });
-  
+  std::sort(sensor_indices.begin(), sensor_indices.end(),
+            [&sensors](size_t a, size_t b)
+            {
+              double power_a = sensors[a].get_tx_power_dbm() + sensors[a].get_tx_antenna_gain_dbi();
+              double power_b = sensors[b].get_tx_power_dbm() + sensors[b].get_tx_antenna_gain_dbi();
+              return power_a > power_b; // Strongest first
+            });
+
   int count = 0;
   std::vector<float> u_pos_range;
   std::vector<float> u_p1;
   std::vector<float> u_p2;
 
-  for (size_t idx : sensor_indices) {
-    if (count >= 32) break;
-    
+  for (size_t idx : sensor_indices)
+  {
+    if (count >= 32)
+      break;
+
     const auto &s = sensors[idx];
 
     float u = (float)((s.get_longitude() - min_lon) / (max_lon - min_lon));
-    float v = 1.0f - (float)((s.get_latitude() - min_lat) / (max_lat - min_lat));  // Flip V for OpenGL
-    float range_m = (float)s.get_range();  // Pass range in meters
+    float v = 1.0f - (float)((s.get_latitude() - min_lat) / (max_lat - min_lat)); // Flip V for OpenGL
+    float range_m = (float)s.get_range();                                         // Pass range in meters
 
     u_pos_range.push_back(u);
     u_pos_range.push_back(v);
@@ -366,7 +374,8 @@ void main() {
   }
 
   m_shader->set_int("u_sensor_count", count);
-  if (count > 0) {
+  if (count > 0)
+  {
     m_shader->set_vec4_array("u_sensor_pos_range", count, u_pos_range.data());
     m_shader->set_vec4_array("u_sensor_params_1", count, u_p1.data());
     m_shader->set_vec4_array("u_sensor_params_2", count, u_p2.data());
@@ -400,9 +409,11 @@ void main() {
   return m_result_texture;
 }
 
-void gpu_rf_engine_t::update_antenna_pattern_texture(const std::vector<sensor_t> &sensors) {
+void gpu_rf_engine_t::update_antenna_pattern_texture(const std::vector<sensor_t> &sensors)
+{
   // Create texture if it doesn't exist
-  if (m_antenna_pattern_texture == 0) {
+  if (m_antenna_pattern_texture == 0)
+  {
     glGenTextures(1, &m_antenna_pattern_texture);
     glBindTexture(GL_TEXTURE_2D, m_antenna_pattern_texture);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
@@ -418,34 +429,33 @@ void gpu_rf_engine_t::update_antenna_pattern_texture(const std::vector<sensor_t>
 
   int num_sensors = std::min((int)sensors.size(), m_max_pattern_sensors);
   std::cout << "[DEBUG] Uploading patterns for " << num_sensors << " sensors" << std::endl;
-  
-  for (int i = 0; i < num_sensors; ++i) {
-    const auto& sensor = sensors[i];
+
+  for (int i = 0; i < num_sensors; ++i)
+  {
+    const auto &sensor = sensors[i];
     auto pattern = sensor.get_pattern();
-    
-    std::cout << "[DEBUG] Sensor " << i << " has pattern: " 
-              << (pattern ? pattern->name : "NONE") << std::endl;
-    
+
+    std::cout << "[DEBUG] Sensor " << i << " has pattern: " << (pattern ? pattern->name : "NONE") << std::endl;
+
     // Sample antenna pattern at each degree
     float min_gain = 0.0f, max_gain = 0.0f;
-    for (int angle = 0; angle < 360; ++angle) {
+    for (int angle = 0; angle < 360; ++angle)
+    {
       float gain_db = static_cast<float>(sensor.get_antenna_gain(static_cast<double>(angle)));
       pattern_data[i * 360 + angle] = gain_db;
-      if (angle == 0 || gain_db < min_gain) min_gain = gain_db;
-      if (angle == 0 || gain_db > max_gain) max_gain = gain_db;
+      if (angle == 0 || gain_db < min_gain)
+        min_gain = gain_db;
+      if (angle == 0 || gain_db > max_gain)
+        max_gain = gain_db;
     }
-    
+
     std::cout << "[DEBUG]   Gain range: " << min_gain << " to " << max_gain << " dB" << std::endl;
-    std::cout << "[DEBUG]   Sample gains: 0°=" << pattern_data[i*360 + 0] 
-              << " 90°=" << pattern_data[i*360 + 90]
-              << " 180°=" << pattern_data[i*360 + 180]
-              << " 270°=" << pattern_data[i*360 + 270] << std::endl;
+    std::cout << "[DEBUG]   Sample gains: 0°=" << pattern_data[i * 360 + 0] << " 90°=" << pattern_data[i * 360 + 90] << " 180°=" << pattern_data[i * 360 + 180] << " 270°=" << pattern_data[i * 360 + 270] << std::endl;
   }
 
   // Upload to GPU
   glBindTexture(GL_TEXTURE_2D, m_antenna_pattern_texture);
-  glTexImage2D(GL_TEXTURE_2D, 0, GL_R32F, 360, m_max_pattern_sensors, 
-               0, GL_RED, GL_FLOAT, pattern_data.data());
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_R32F, 360, m_max_pattern_sensors, 0, GL_RED, GL_FLOAT, pattern_data.data());
   std::cout << "[DEBUG] Uploaded pattern texture to GPU" << std::endl;
 }
 

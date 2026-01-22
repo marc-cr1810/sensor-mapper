@@ -6,14 +6,21 @@
 #include <memory>
 #include <string>
 
-namespace sensor_mapper {
+namespace sensor_mapper
+{
 
 // Key for tile cache: "z/x/y"
 using tile_key_t = std::string;
 
-class tile_service_t {
+class tile_service_t
+{
 public:
-  enum class tile_source_t { OSM, TERRARIUM, SATELLITE };
+  enum class tile_source_t
+  {
+    OSM,
+    TERRARIUM,
+    SATELLITE
+  };
 
   tile_service_t();
   ~tile_service_t();
@@ -30,7 +37,8 @@ public:
   auto update() -> void;
 
 private:
-  struct pending_tile_t {
+  struct pending_tile_t
+  {
     int z, x, y;
     std::future<std::string> data_future;
   };
