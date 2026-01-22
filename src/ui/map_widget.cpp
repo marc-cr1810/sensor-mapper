@@ -529,33 +529,77 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors,
       static double prev_min_lat = 0.0, prev_max_lat = 0.0;
       static double prev_min_lon = 0.0, prev_max_lon = 0.0;
       static size_t prev_sensor_count = 0;
+      static double last_render_time = 0.0;
+      static double cached_render_min_lat = 0.0;
+      static double cached_render_max_lat = 0.0;
+      static double cached_render_min_lon = 0.0;
+      static double cached_render_max_lon = 0.0;
       
-      // Check if view or sensors changed (threshold: 0.0001 degrees ~= 11 meters)
-      bool view_changed = 
-          std::abs(min_lat - prev_min_lat) > 0.0001 ||
-          std::abs(max_lat - prev_max_lat) > 0.0001 ||
-          std::abs(min_lon - prev_min_lon) > 0.0001 ||
-          std::abs(max_lon - prev_max_lon) > 0.0001 ||
+      // Get current time for debouncing
+      double current_time = ImGui::GetTime();
+      
+      // Check if view or sensors changed significantly
+      // Increased threshold to 0.01 degrees (~1.1 km) to reduce re-renders during pan/zoom
+      // Also added 20% margin to render area for smoother panning
+      double lat_margin = (max_lat - min_lat) * 0.2;
+      double lon_margin = (max_lon - min_lon) * 0.2;
+      double render_min_lat = min_lat - lat_margin;
+      double render_max_lat = max_lat + lat_margin;
+      double render_min_lon = min_lon - lon_margin;
+      double render_max_lon = max_lon + lon_margin;
+      
+      bool view_changed_significantly = 
+          std::abs(render_min_lat - prev_min_lat) > 0.01 ||
+          std::abs(render_max_lat - prev_max_lat) > 0.01 ||
+          std::abs(render_min_lon - prev_min_lon) > 0.01 ||
+          std::abs(render_max_lon - prev_max_lon) > 0.01 ||
           sensors.size() != prev_sensor_count;
       
-      if (m_heatmap_dirty || view_changed) {
+      // Debounce: Only render if enough time has passed (0.3 seconds) OR if dirty flag is set
+      bool should_render = m_heatmap_dirty || 
+                          (view_changed_significantly && (current_time - last_render_time) > 0.3);
+      
+      if (should_render) {
         m_heatmap_texture_id = m_rf_engine->render(
-            sensors, &elevation_service, min_lat, max_lat, min_lon, max_lon);
+            sensors, &elevation_service, render_min_lat, render_max_lat, 
+            render_min_lon, render_max_lon);
         m_heatmap_dirty = false;
+        last_render_time = current_time;
         
-        // Update tracked view
-        prev_min_lat = min_lat;
-        prev_max_lat = max_lat;
-        prev_min_lon = min_lon;
-        prev_max_lon = max_lon;
+        // Update tracked view with expanded bounds
+        prev_min_lat = render_min_lat;
+        prev_max_lat = render_max_lat;
+        prev_min_lon = render_min_lon;
+        prev_max_lon = render_max_lon;
         prev_sensor_count = sensors.size();
+        
+        // Cache the actual render bounds for UV calculation
+        cached_render_min_lat = render_min_lat;
+        cached_render_max_lat = render_max_lat;
+        cached_render_min_lon = render_min_lon;
+        cached_render_max_lon = render_max_lon;
       }
 
       // Draw GPU-rendered texture overlay (if enabled)
       if (m_heatmap_texture_id != 0 && m_show_heatmap_overlay) {
+        // Calculate UV coordinates to map viewport to the larger rendered area
+        float u_min = (float)((min_lon - cached_render_min_lon) / (cached_render_max_lon - cached_render_min_lon));
+        float u_max = (float)((max_lon - cached_render_min_lon) / (cached_render_max_lon - cached_render_min_lon));
+        float v_min = (float)((max_lat - cached_render_max_lat) / (cached_render_min_lat - cached_render_max_lat));
+        float v_max = (float)((min_lat - cached_render_max_lat) / (cached_render_min_lat - cached_render_max_lat));
+        
+        // Clamp UV coordinates to valid range
+        u_min = std::max(0.0f, std::min(1.0f, u_min));
+        u_max = std::max(0.0f, std::min(1.0f, u_max));
+        v_min = std::max(0.0f, std::min(1.0f, v_min));
+        v_max = std::max(0.0f, std::min(1.0f, v_max));
+        
         draw_list->AddImage(
-            (ImTextureID)(intptr_t)m_heatmap_texture_id, canvas_p0,
-            ImVec2(canvas_p0.x + canvas_sz.x, canvas_p0.y + canvas_sz.y));
+            (ImTextureID)(intptr_t)m_heatmap_texture_id, 
+            canvas_p0,
+            ImVec2(canvas_p0.x + canvas_sz.x, canvas_p0.y + canvas_sz.y),
+            ImVec2(u_min, v_min),
+            ImVec2(u_max, v_max));
       }
     }
 
