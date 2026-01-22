@@ -113,7 +113,9 @@ void gpu_rf_engine_t::update_elevation_texture(elevation_service_t *service,
       float elev = 0.0f;
       if (service)
         service->get_elevation(lat, lon, elev);
-      data[y * w + x] = elev;
+      // Flip Y coordinate to match OpenGL texture coordinates
+      int flipped_y = (h - 1) - y;
+      data[flipped_y * w + x] = elev;
     }
   }
 
@@ -140,7 +142,7 @@ uniform sampler2D u_elevation;
 
 struct Sensor {
     vec2 pos_uv;      // 0-1
-    float range_uv;   // Range in UV units
+    float range_m;    // Range in meters
     float power_dbm;  
     float freq_mhz;
     float azimuth_deg; 
@@ -195,9 +197,8 @@ void main() {
         vec2 diff = (v_texcoord - s_uv);
         vec2 diff_m = diff * u_bounds_meters;
         float dist_m = length(diff_m);
-        float dist_uv = length(diff);
         
-        if (dist_uv > s_range) continue;
+        if (dist_m > s_range) continue;
         
         float tx_pwr = u_sensor_params_1[i].x;
         float freq   = u_sensor_params_1[i].y;
@@ -278,12 +279,12 @@ void main() {
     if (count >= 32) break;
 
     float u = (float)((s.get_longitude() - min_lon) / (max_lon - min_lon));
-    float v = (float)((s.get_latitude() - min_lat) / (max_lat - min_lat));
-    float range_uv = (float)(s.get_range() / width_m);
+    float v = 1.0f - (float)((s.get_latitude() - min_lat) / (max_lat - min_lat));  // Flip V for OpenGL
+    float range_m = (float)s.get_range();  // Pass range in meters
 
     u_pos_range.push_back(u);
     u_pos_range.push_back(v);
-    u_pos_range.push_back(range_uv);
+    u_pos_range.push_back(range_m);
     u_pos_range.push_back(0.0f);
 
     u_p1.push_back((float)s.get_tx_power_dbm());

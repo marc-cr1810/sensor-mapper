@@ -523,18 +523,40 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors,
     if (min_lon > max_lon)
       std::swap(min_lon, max_lon);
 
-    // GPU RF Engine: Render directly to texture when dirty
-    if (m_heatmap_dirty && !sensors.empty()) {
-      m_heatmap_texture_id = m_rf_engine->render(
-          sensors, &elevation_service, min_lat, max_lat, min_lon, max_lon);
-      m_heatmap_dirty = false;
-    }
+    // GPU RF Engine: Render composite coverage
+    if (!sensors.empty()) {
+      // Track previous view bounds to detect changes
+      static double prev_min_lat = 0.0, prev_max_lat = 0.0;
+      static double prev_min_lon = 0.0, prev_max_lon = 0.0;
+      static size_t prev_sensor_count = 0;
+      
+      // Check if view or sensors changed (threshold: 0.0001 degrees ~= 11 meters)
+      bool view_changed = 
+          std::abs(min_lat - prev_min_lat) > 0.0001 ||
+          std::abs(max_lat - prev_max_lat) > 0.0001 ||
+          std::abs(min_lon - prev_min_lon) > 0.0001 ||
+          std::abs(max_lon - prev_max_lon) > 0.0001 ||
+          sensors.size() != prev_sensor_count;
+      
+      if (m_heatmap_dirty || view_changed) {
+        m_heatmap_texture_id = m_rf_engine->render(
+            sensors, &elevation_service, min_lat, max_lat, min_lon, max_lon);
+        m_heatmap_dirty = false;
+        
+        // Update tracked view
+        prev_min_lat = min_lat;
+        prev_max_lat = max_lat;
+        prev_min_lon = min_lon;
+        prev_max_lon = max_lon;
+        prev_sensor_count = sensors.size();
+      }
 
-    // Draw GPU-rendered texture
-    if (m_heatmap_texture_id != 0) {
-      draw_list->AddImage(
-          (ImTextureID)(intptr_t)m_heatmap_texture_id, canvas_p0,
+      // Draw GPU-rendered texture
+      if (m_heatmap_texture_id != 0) {
+        draw_list->AddImage(
+            (ImTextureID)(intptr_t)m_heatmap_texture_id, canvas_p0,
             ImVec2(canvas_p0.x + canvas_sz.x, canvas_p0.y + canvas_sz.y));
+      }
     }
 
     // Draw Markers Only

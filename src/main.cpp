@@ -135,6 +135,7 @@ void render_ui(map_widget_t &map, std::vector<sensor_t> &sensors,
     if (ImGui::Button("Add Sensor")) {
       sensors.emplace_back("New Sensor", -33.8688, 151.2093, 1000.0);
       selected_index = static_cast<int>(sensors.size()) - 1;
+      map.invalidate_rf_heatmap();
     }
     ImGui::SameLine();
     bool delete_pressed = ImGui::Button("Delete Sensor");
@@ -163,6 +164,7 @@ void render_ui(map_widget_t &map, std::vector<sensor_t> &sensors,
       sensors.erase(sensors.begin() + selected_index);
       if (selected_index >= static_cast<int>(sensors.size()))
         selected_index = static_cast<int>(sensors.size()) - 1;
+      map.invalidate_rf_heatmap();
     }
 
     ImGui::Separator();
@@ -170,6 +172,7 @@ void render_ui(map_widget_t &map, std::vector<sensor_t> &sensors,
     // Selected Sensor Properties
     if (selected_index >= 0 && selected_index < static_cast<int>(sensors.size())) {
       sensor_t &sensor = sensors[selected_index];
+      bool sensor_modified = false;
       ImGui::Spacing();
       ImGui::Separator();
       ImGui::TextDisabled("PROPERTIES");
@@ -191,11 +194,13 @@ void render_ui(map_widget_t &map, std::vector<sensor_t> &sensors,
         double lat = sensor.get_latitude();
         if (ImGui::InputDouble("Latitude", &lat, 0.0001, 0.001, "%.6f")) {
           sensor.set_latitude(lat);
+          sensor_modified = true;
         }
 
         double lon = sensor.get_longitude();
         if (ImGui::InputDouble("Longitude", &lon, 0.0001, 0.001, "%.6f")) {
           sensor.set_longitude(lon);
+          sensor_modified = true;
         }
 
         if (ImGui::Button("Snap to Building Height")) {
@@ -204,6 +209,7 @@ void render_ui(map_widget_t &map, std::vector<sensor_t> &sensors,
           double b_h = map.get_building_at_location(lat, lon);
           if (b_h > 0) {
             sensor.set_mast_height(b_h);
+            sensor_modified = true;
           }
         }
         if (ImGui::IsItemHovered())
@@ -215,23 +221,27 @@ void render_ui(map_widget_t &map, std::vector<sensor_t> &sensors,
         double range = sensor.get_range();
         if (ImGui::InputDouble("Range (m)", &range, 100.0, 1000.0)) {
           sensor.set_range(range);
+          sensor_modified = true;
         }
 
         double mast_height = sensor.get_mast_height();
         if (ImGui::InputDouble("Mast Height (m)", &mast_height, 1.0, 5.0)) {
           sensor.set_mast_height(mast_height);
+          sensor_modified = true;
         }
 
         // Directional Parameters
         float azimuth = static_cast<float>(sensor.get_azimuth_deg());
         if (ImGui::SliderFloat("Azimuth", &azimuth, 0.0f, 360.0f, "%.0f deg")) {
           sensor.set_azimuth_deg(static_cast<double>(azimuth));
+          sensor_modified = true;
         }
 
         float beamwidth = static_cast<float>(sensor.get_beamwidth_deg());
         if (ImGui::SliderFloat("Beamwidth", &beamwidth, 1.0f, 360.0f,
                                "%.0f deg")) {
           sensor.set_beamwidth_deg(static_cast<double>(beamwidth));
+          sensor_modified = true;
         }
 
         // Propagation Model
@@ -242,6 +252,7 @@ void render_ui(map_widget_t &map, std::vector<sensor_t> &sensors,
                          IM_ARRAYSIZE(model_names))) {
           sensor.set_propagation_model(
               static_cast<sensor_mapper::PropagationModel>(current_model));
+          sensor_modified = true;
         }
 
         // Display effective height
@@ -264,13 +275,20 @@ void render_ui(map_widget_t &map, std::vector<sensor_t> &sensors,
       if (ImGui::CollapsingHeader("Advanced")) {
         if (ImGui::Checkbox("Auto Terrain Altitude", &use_auto)) {
           sensor.set_use_auto_elevation(use_auto);
+          sensor_modified = true;
         }
 
         if (!use_auto) {
           if (ImGui::InputDouble("Manual Ground Elev", &ground_elevation)) {
             sensor.set_ground_elevation(ground_elevation);
+            sensor_modified = true;
           }
         }
+      }
+      
+      // Invalidate RF heatmap if any sensor property was modified
+      if (sensor_modified) {
+        map.invalidate_rf_heatmap();
       }
 
       // If Auto is enabled, try to display the actual fetched elevation
@@ -332,6 +350,7 @@ void render_ui(map_widget_t &map, std::vector<sensor_t> &sensors,
                sensors.emplace_back("New Sensor", lat, lon, 5000.0);
                auto &s = sensors.back();
                s.set_mast_height(mast_h); // Set height (AGL)
+               map.invalidate_rf_heatmap();
 
                // If on building, user probably wants it ON the roof, not
                // floating 5m above it? Wait, mast_height is AGL (Above Ground

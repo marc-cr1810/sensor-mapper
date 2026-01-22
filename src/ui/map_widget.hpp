@@ -46,6 +46,9 @@ public:
   auto get_show_buildings() const -> bool { return m_show_buildings; }
   auto set_show_buildings(bool show) -> void { m_show_buildings = show; }
 
+  // Mark the RF heatmap as dirty to trigger re-render
+  auto invalidate_rf_heatmap() -> void { m_heatmap_dirty = true; }
+
 private:
   double m_center_lat;
   double m_center_lon;
