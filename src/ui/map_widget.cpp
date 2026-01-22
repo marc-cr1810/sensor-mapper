@@ -680,9 +680,14 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors,
       double azimuth_deg = sensor.get_azimuth_deg();
       double beamwidth_deg = sensor.get_beamwidth_deg();
       PropagationModel prop_model = sensor.get_propagation_model();
+      
+      // Add antenna pattern to hash to invalidate cache when pattern changes
+      auto pattern = sensor.get_pattern();
+      std::string pattern_name = pattern ? pattern->name : "none";
 
-      current_hash += std::format("_{:.1f}_{:.1f}_{}", azimuth_deg,
-                                  beamwidth_deg, static_cast<int>(prop_model));
+      current_hash += std::format("_{:.1f}_{:.1f}_{}_{}", azimuth_deg,
+                                  beamwidth_deg, static_cast<int>(prop_model),
+                                  pattern_name);
 
       // Check Cache
       bool cache_valid = false;
@@ -863,16 +868,9 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors,
               }
             }
 
-            // Calculate Antenna Pattern Loss
-            double angle_diff = std::abs(angle - azimuth_deg);
-            if (angle_diff > 180.0)
-              angle_diff = 360.0 - angle_diff;
-
-            double antenna_pattern_loss = 0.0;
-            if (angle_diff > beamwidth_deg / 2.0) {
-              // Outside beamwidth - apply Front-to-Back ratio penalty
-              antenna_pattern_loss = 25.0; // 25 dB attenuation
-            }
+            // Calculate Antenna Pattern Loss using actual antenna pattern
+            double antenna_pattern_gain = sensor.get_antenna_gain(angle);
+            double antenna_pattern_loss = -antenna_pattern_gain; // Convert gain to loss
 
             // Calculate received power
             // P_rx = P_tx + G_tx + G_rx - Path_Loss - Terrain - Building -
@@ -936,12 +934,9 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors,
             }
           }
 
-          // Recalculate Antenna Pattern Loss for edge point
-          double angle_diff = std::abs(angle - azimuth_deg);
-          if (angle_diff > 180.0)
-            angle_diff = 360.0 - angle_diff;
-          double antenna_pattern_loss =
-              (angle_diff > beamwidth_deg / 2.0) ? 25.0 : 0.0;
+          // Recalculate Antenna Pattern Loss for edge point using actual antenna pattern
+          double antenna_pattern_gain = sensor.get_antenna_gain(angle);
+          double antenna_pattern_loss = -antenna_pattern_gain; // Convert gain to loss
 
           double p_rx_dbm = tx_power_dbm + tx_gain_dbi + rx_gain_dbi -
                             path_loss_db - terrain_loss_db -

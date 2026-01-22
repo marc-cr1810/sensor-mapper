@@ -134,6 +134,10 @@ auto sensor_t::get_antenna_gain(double angle_deg) const -> double {
     // angle_deg is deviation from North (0-360)
     // We need deviation from Azimuth
     double rel_angle = angle_deg - m_azimuth_deg;
+    
+    // Normalize to 0-360 range
+    while (rel_angle < 0.0) rel_angle += 360.0;
+    while (rel_angle >= 360.0) rel_angle -= 360.0;
 
     // Use the new get_gain method with interpolation
     // Returns gain in dB relative to pattern's max gain

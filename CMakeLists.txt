@@ -109,6 +109,7 @@ set(SOURCES
     src/ui/texture.cpp
     src/ui/texture.hpp
     src/ui/antenna_pattern_ui.hpp
+    src/ui/antenna_pattern_3d_viewer.hpp
 )
 
 # Executable

@@ -4,6 +4,7 @@
 #include "../core/antenna_pattern_io.hpp"
 #include "../core/antenna_pattern_library.hpp"
 #include "../core/antenna_pattern_viz.hpp"
+#include "antenna_pattern_3d_viewer.hpp"
 #include <imgui.h>
 #include <memory>
 #include <string>
@@ -28,6 +29,9 @@ struct antenna_pattern_ui_state_t {
   float viz_elevation_angle = 0.0f;
   int viz_show_3d = 0;
   viz_params_t viz_params;
+  
+  // 3D viewer instance
+  std::unique_ptr<antenna_pattern_3d_viewer_t> viewer_3d;
   
   // File I/O
   bool show_load_dialog = false;
@@ -367,8 +371,12 @@ public:
         // 2D polar plot
         render_polar_plot(*pattern, state.viz_elevation_angle, state.viz_params);
       } else {
-        // 3D visualization
-        render_3d_pattern_view(*pattern, state.viz_params);
+        // 3D visualization with OpenGL
+        if (!state.viewer_3d) {
+          state.viewer_3d = std::make_unique<antenna_pattern_3d_viewer_t>();
+        }
+        ImVec2 canvas_size = ImGui::GetContentRegionAvail();
+        state.viewer_3d->render(*pattern, state.viz_params, canvas_size);
       }
       
       ImGui::EndChild();
@@ -956,27 +964,97 @@ private:
     ImGui::Dummy(canvas_size);
   }
   
-  // Render 3D pattern view (simplified)
+  // Render 3D pattern view (stacked elevation cuts)
   static auto render_3d_pattern_view(const antenna_pattern_t& pattern,
-                                     const viz_params_t& /* params */) -> void {
-    ImGui::Text("3D visualization requires full 3D rendering context.");
-    ImGui::Text("Pattern: %s", pattern.name.c_str());
-    ImGui::Text("Max Gain: %.2f dBi", pattern.max_gain_dbi);
-    ImGui::Separator();
+                                     const viz_params_t& params) -> void {
+    ImVec2 canvas_size = ImGui::GetContentRegionAvail();
+    if (canvas_size.x < 100.0f) canvas_size.x = 500.0f;
+    if (canvas_size.y < 100.0f) canvas_size.y = 500.0f;
     
-    // Show elevation cuts at different azimuths
-    ImGui::Text("Elevation Cuts:");
+    ImVec2 canvas_pos = ImGui::GetCursorScreenPos();
+    ImDrawList* draw_list = ImGui::GetWindowDrawList();
     
-    for (int az = 0; az < 360; az += 90) {
-      ImGui::Text("Azimuth %d°:", az);
-      ImGui::Indent();
-      for (int el = -90; el <= 90; el += 30) {
-        float gain = pattern.get_gain(static_cast<float>(az), 
-                                     static_cast<float>(el), true);
-        ImGui::Text("  %+3d°: %+6.2f dB", el, gain);
+    // Background
+    draw_list->AddRectFilled(canvas_pos,
+                            ImVec2(canvas_pos.x + canvas_size.x, canvas_pos.y + canvas_size.y),
+                            IM_COL32(15, 15, 15, 255));
+    
+    ImVec2 center = ImVec2(canvas_pos.x + canvas_size.x * 0.5f,
+                          canvas_pos.y + canvas_size.y * 0.6f);
+    float base_radius = std::min(canvas_size.x, canvas_size.y) * 0.35f;
+    
+    // Draw multiple elevation cuts stacked in 3D perspective
+    int num_elevation_cuts = 7;
+    for (int elev_idx = 0; elev_idx < num_elevation_cuts; ++elev_idx) {
+      float elev = -60.0f + (elev_idx * 120.0f / (num_elevation_cuts - 1));
+      
+      // 3D perspective: lower elevations appear smaller and higher
+      float depth_factor = 0.3f + 0.7f * (elev_idx / (float)(num_elevation_cuts - 1));
+      float y_offset = -100.0f * (1.0f - depth_factor);
+      float radius = base_radius * depth_factor;
+      
+      ImVec2 slice_center = ImVec2(center.x, center.y + y_offset);
+      
+      // Draw reference circle
+      draw_list->AddCircle(slice_center, radius, 
+                          IM_COL32(50, 50, 50, 150), 64, 1.0f);
+      
+      // Generate pattern points for this elevation
+      std::vector<ImVec2> points;
+      for (int angle = 0; angle <= 360; angle += 3) {
+        float gain_db = pattern.get_gain(static_cast<float>(angle % 360), elev, true);
+        
+        if (params.normalize_to_peak) {
+          gain_db -= pattern.max_gain_dbi;
+        }
+        
+        float normalized = (gain_db - params.min_gain_db) / 
+                          (params.max_gain_db - params.min_gain_db);
+        normalized = std::clamp(normalized, 0.0f, 1.0f);
+        
+        float angle_rad = angle * M_PI / 180.0f;
+        float r = radius * normalized;
+        float x = slice_center.x + std::sin(angle_rad) * r;
+        float y = slice_center.y - std::cos(angle_rad) * r;
+        points.push_back(ImVec2(x, y));
       }
-      ImGui::Unindent();
+      
+      // Color based on elevation
+      float color_t = (elev + 60.0f) / 120.0f;
+      ImU32 color = IM_COL32(
+        static_cast<int>(100 + 155 * color_t),
+        static_cast<int>(150 + 105 * (1.0f - std::abs(color_t - 0.5f) * 2.0f)),
+        static_cast<int>(255 - 155 * color_t),
+        200
+      );
+      
+      // Fill the pattern shape
+      if (!points.empty()) {
+        draw_list->AddConvexPolyFilled(points.data(), points.size(), 
+                                      IM_COL32((color >> 0) & 0xFF,
+                                               (color >> 8) & 0xFF,
+                                               (color >> 16) & 0xFF,
+                                               100));
+        
+        // Draw outline
+        for (size_t i = 0; i < points.size() - 1; ++i) {
+          draw_list->AddLine(points[i], points[i + 1], color, 2.0f);
+        }
+      }
+      
+      // Label elevation angle
+      char label[32];
+      snprintf(label, sizeof(label), "%+.0f°", elev);
+      draw_list->AddText(ImVec2(slice_center.x + radius + 5, slice_center.y - 10),
+                        IM_COL32(200, 200, 200, 255), label);
     }
+    
+    // Title
+    draw_list->AddText(ImVec2(canvas_pos.x + 10, canvas_pos.y + 10),
+                      IM_COL32(255, 255, 255, 255), 
+                      "3D Pattern (Stacked Elevation Cuts)");
+    
+    ImGui::Dummy(canvas_size);
   }
 };
 

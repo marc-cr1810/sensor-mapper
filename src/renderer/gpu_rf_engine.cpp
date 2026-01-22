@@ -218,8 +218,10 @@ void main() {
         float ground = u_sensor_params_2[i].z;
         int   model  = int(u_sensor_params_2[i].w);
 
-        float angle_rad = atan(diff_m.x, diff_m.y);
+        float angle_rad = atan(diff_m.y, diff_m.x);
         float angle_deg = degrees(angle_rad);
+        // Convert from math angle (0=East, CCW) to geographic bearing (0=North, CW)
+        angle_deg = 90.0 - angle_deg;
         if (angle_deg < 0.0) angle_deg += 360.0;
 
         // Antenna Pattern - sample from texture

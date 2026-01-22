@@ -186,17 +186,22 @@ public:
         // Clamp to display range
         gain_db = std::max(gain_db, params.min_gain_db);
         
-        // Convert gain to radius
-        float radius;
+        // Convert gain to radius with minimum base radius for visibility
+        float base_radius = 0.2f * params.scale_factor; // Minimum visible radius
+        float gain_radius;
+        
         if (params.show_in_linear) {
           float linear_gain = std::pow(10.0f, gain_db / 10.0f);
           float linear_max = std::pow(10.0f, params.max_gain_db / 10.0f);
-          radius = (linear_gain / linear_max) * params.scale_factor;
+          gain_radius = (linear_gain / linear_max) * 0.8f * params.scale_factor;
         } else {
           float norm_gain = (gain_db - params.min_gain_db) / 
                            (params.max_gain_db - params.min_gain_db);
-          radius = std::max(norm_gain, 0.1f) * params.scale_factor;
+          norm_gain = std::clamp(norm_gain, 0.0f, 1.0f);
+          gain_radius = norm_gain * 0.8f * params.scale_factor;
         }
+        
+        float radius = base_radius + gain_radius;
         
         // Convert spherical to Cartesian
         // Antenna convention: azimuth from North (Y-axis), elevation from horizon
