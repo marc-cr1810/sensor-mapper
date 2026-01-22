@@ -7,7 +7,6 @@
 #include <fstream>
 #include <iostream>
 
-
 namespace fs = std::filesystem;
 
 namespace sensor_mapper {
@@ -161,6 +160,7 @@ auto elevation_service_t::fetch_tile(int z, int x, int y) -> void {
 }
 
 auto elevation_service_t::update() -> void {
+  std::scoped_lock lock(m_mutex);
   auto it = m_pending.begin();
   while (it != m_pending.end()) {
     if (it->data_future.wait_for(std::chrono::seconds(0)) ==

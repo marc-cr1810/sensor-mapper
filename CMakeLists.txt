@@ -75,6 +75,7 @@ FetchContent_MakeAvailable(json)
 # Source Files
 set(SOURCES
     src/main.cpp
+    src/core/antenna_pattern.hpp
     src/core/building_service.cpp
     src/core/building_service.hpp
     src/core/elevation_service.cpp

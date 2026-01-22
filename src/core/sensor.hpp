@@ -1,7 +1,10 @@
 #pragma once
 
+#include "core/antenna_pattern.hpp"
 #include <array>
+#include <memory>
 #include <string>
+
 
 namespace sensor_mapper {
 
@@ -68,6 +71,9 @@ public:
   auto get_beamwidth_deg() const -> double;
   auto set_beamwidth_deg(double beamwidth) -> void;
 
+  auto set_custom_pattern(std::shared_ptr<antenna_pattern_t> pattern) -> void;
+  auto get_antenna_gain(double angle_deg) const -> double;
+
   // Propagation Model
   auto get_propagation_model() const -> PropagationModel;
   auto set_propagation_model(PropagationModel model) -> void;
@@ -93,6 +99,7 @@ private:
   // Directional Antenna
   double m_azimuth_deg;   // 0-360 degrees (North=0, CW)
   double m_beamwidth_deg; // 0-360 degrees
+  std::shared_ptr<antenna_pattern_t> m_pattern;
 
   // Model
   PropagationModel m_propagation_model;

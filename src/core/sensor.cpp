@@ -119,6 +119,39 @@ auto sensor_t::set_beamwidth_deg(double beamwidth) -> void {
   m_beamwidth_deg = beamwidth;
 }
 
+auto sensor_t::set_custom_pattern(std::shared_ptr<antenna_pattern_t> pattern)
+    -> void {
+  m_pattern = pattern;
+}
+
+auto sensor_t::get_antenna_gain(double angle_deg) const -> double {
+  // If we have a custom pattern, use it
+  if (m_pattern && !m_pattern->gain_db.empty()) {
+    // angle_deg is deviation from North (0-360)
+    // We need deviation from Azimuth
+    double rel_angle = angle_deg - m_azimuth_deg;
+
+    // Normalize to 0-359 positive integer
+    int idx = static_cast<int>(std::round(rel_angle));
+    while (idx < 0)
+      idx += 360;
+    while (idx >= 360)
+      idx -= 360;
+
+    return m_pattern->gain_db[idx];
+  }
+
+  // Fallback to simple beamwidth model
+  double angle_diff = std::abs(angle_deg - m_azimuth_deg);
+  if (angle_diff > 180.0)
+    angle_diff = 360.0 - angle_diff;
+
+  // Ideally, gain is part of tx_antenna_gain_dbi for the main beam.
+  // Here we return ATTENUATION (negative gain) relative to peak.
+  // 0.0 means peak gain. -25.0 means side lobe.
+  return (angle_diff > m_beamwidth_deg / 2.0) ? -25.0 : 0.0;
+}
+
 auto sensor_t::get_propagation_model() const -> PropagationModel {
   return m_propagation_model;
 }

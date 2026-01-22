@@ -1,11 +1,11 @@
 #pragma once
 
+#include "elevation_service.hpp"
 #include "sensor.hpp"
 #include <array>
 #include <future>
 #include <memory>
 #include <vector>
-
 
 namespace sensor_mapper {
 
@@ -25,7 +25,8 @@ public:
   ~rf_engine_t();
 
   // Async coverage calculation
-  auto compute_coverage(const std::vector<sensor_t> &sensors, double min_lat,
+  auto compute_coverage(const std::vector<sensor_t> &sensors,
+                        elevation_service_t *elevation_service, double min_lat,
                         double max_lat, double min_lon, double max_lon,
                         int width, int height)
       -> std::future<std::shared_ptr<coverage_grid_t>>;

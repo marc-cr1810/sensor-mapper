@@ -535,7 +535,7 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors,
     // Ideally only trigger when map settles.
     if (!is_computing && (m_heatmap_dirty || !m_latest_grid)) {
       m_coverage_future = m_rf_engine->compute_coverage(
-          sensors, min_lat, max_lat, min_lon, max_lon, 256,
+          sensors, &elevation_service, min_lat, max_lat, min_lon, max_lon, 256,
           256);                // Fixed resolution for heatmap
       m_heatmap_dirty = false; // "Clean" until result comes back
     }

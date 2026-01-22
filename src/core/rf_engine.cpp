@@ -4,7 +4,6 @@
 #include <cmath>
 #include <iostream>
 
-
 namespace sensor_mapper {
 
 rf_engine_t::rf_engine_t() {}
@@ -44,6 +43,7 @@ auto rf_engine_t::calculate_hata(double d_km, double f_mhz, double h_tx,
 }
 
 auto rf_engine_t::compute_coverage(const std::vector<sensor_t> &sensors,
+                                   elevation_service_t *elevation_service,
                                    double min_lat, double max_lat,
                                    double min_lon, double max_lon, int width,
                                    int height)
@@ -62,8 +62,8 @@ auto rf_engine_t::compute_coverage(const std::vector<sensor_t> &sensors,
     grid->max_lon = max_lon;
     grid->signal_dbm.resize(width * height, -200.0f); // Init to noise
 
-    // Pre-calculate sensor world positions (optional optimization, but we do
-    // lat/lon dists)
+    const double PI = 3.14159265359;
+    const double EARTH_RADIUS = 6371000.0;
 
     for (int y = 0; y < height; ++y) {
       double t = (double)y / (height - 1);
@@ -72,6 +72,13 @@ auto rf_engine_t::compute_coverage(const std::vector<sensor_t> &sensors,
       for (int x = 0; x < width; ++x) {
         double u = (double)x / (width - 1);
         double cell_lon = min_lon + u * (max_lon - min_lon);
+
+        // Cache cell elevation locally if possible
+        float cell_elevation_m = 0.0f;
+        if (elevation_service) {
+          elevation_service->get_elevation(cell_lat, cell_lon,
+                                           cell_elevation_m);
+        }
 
         double max_dbm = -200.0;
 
@@ -87,32 +94,77 @@ auto rf_engine_t::compute_coverage(const std::vector<sensor_t> &sensors,
               geo::bearing(sensor.get_latitude(), sensor.get_longitude(),
                            cell_lat, cell_lon);
 
-          // Antenna Pattern
-          double azimuth = sensor.get_azimuth_deg();
-          double beamwidth = sensor.get_beamwidth_deg();
-          double angle_diff = std::abs(angle - azimuth);
-          if (angle_diff > 180.0)
-            angle_diff = 360.0 - angle_diff;
-
-          double pattern_loss = (angle_diff > beamwidth / 2.0) ? 25.0 : 0.0;
+          // Phase 3: Antenna Pattern Gain
+          // get_antenna_gain returns relative gain (usually negative
+          // attenuation or 0)
+          double pattern_gain = sensor.get_antenna_gain(angle);
 
           // Path Loss
           double d_km = dist_m / 1000.0;
           double path_loss = 0.0;
-          double h_tx = sensor.get_mast_height(); // + ground elevation if we
-                                                  // had it here efficiently
+          double h_tx =
+              sensor.get_mast_height() + sensor.get_ground_elevation();
+          double h_rx = 2.0 + cell_elevation_m;
+
+          // Simple Terrain Occlusion (Line of Sight)
+          double diffraction_loss = 0.0;
+          if (elevation_service) {
+            // Raymarch
+            // Number of steps based on distance (e.g., every 50m)
+            int steps = static_cast<int>(dist_m / 50.0);
+            if (steps > 0) {
+              double s_lat_rad = sensor.get_latitude() * PI / 180.0;
+              double s_lon_rad = sensor.get_longitude() * PI / 180.0;
+              double c_lat_rad = cell_lat * PI / 180.0;
+              double c_lon_rad = cell_lon * PI / 180.0;
+
+              for (int i = 1; i < steps; ++i) {
+                double t_step = (double)i / steps;
+                // Linear Interpolation of Lat/Lon (Approximation for short
+                // distances)
+                double p_lat = sensor.get_latitude() +
+                               t_step * (cell_lat - sensor.get_latitude());
+                double p_lon = sensor.get_longitude() +
+                               t_step * (cell_lon - sensor.get_longitude());
+
+                float p_h = 0.0f;
+                if (elevation_service->get_elevation(p_lat, p_lon, p_h)) {
+                  // Interpolate Ray Height (Earth curvature ignored for short
+                  // range, but added for >1km?) Simple flat earth ray:
+                  double ray_h = h_tx + t_step * (h_rx - h_tx);
+
+                  // Earth curvature drop: d^2 / (2*R) approx?
+                  // Let's stick to simple line for now.
+
+                  if (p_h > ray_h) {
+                    // Blocked!
+                    // Variable loss based on depth?
+                    diffraction_loss =
+                        20.0 + (p_h - ray_h) * 0.5; // Soft diffraction
+                    if (diffraction_loss > 100.0)
+                      diffraction_loss = 100.0;
+                    break; // Early exit on block
+                  }
+                }
+              }
+            }
+          }
 
           if (sensor.get_propagation_model() == PropagationModel::FreeSpace) {
             path_loss = calculate_fspl(d_km, sensor.get_frequency_mhz());
           } else {
-            // Assume 2m RX height
-            path_loss = calculate_hata(d_km, sensor.get_frequency_mhz(), h_tx,
-                                       2.0, sensor.get_propagation_model());
+            // Hata requires effective height.
+            // h_tx is height above average terrain vs height above ground.
+            // Using Mast Height for now as per Hata spec relative to ground.
+            path_loss = calculate_hata(d_km, sensor.get_frequency_mhz(),
+                                       sensor.get_mast_height(), 2.0,
+                                       sensor.get_propagation_model());
           }
 
-          double rx =
-              sensor.get_tx_power_dbm() + sensor.get_tx_antenna_gain_dbi() +
-              sensor.get_rx_antenna_gain_dbi() - path_loss - pattern_loss;
+          double rx = sensor.get_tx_power_dbm() +
+                      sensor.get_tx_antenna_gain_dbi() +
+                      sensor.get_rx_antenna_gain_dbi() - path_loss +
+                      pattern_gain - diffraction_loss;
 
           if (rx > max_dbm)
             max_dbm = rx;

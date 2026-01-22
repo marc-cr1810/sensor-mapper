@@ -3,8 +3,10 @@
 #include <future>
 #include <map>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
+
 
 namespace sensor_mapper {
 
@@ -38,6 +40,7 @@ private:
   std::map<tile_key_t, std::shared_ptr<elevation_tile_t>> m_cache;
   std::vector<pending_fetch_t> m_pending;
   std::vector<tile_key_t> m_loading_keys;
+  std::mutex m_mutex;
 
   auto make_key(int z, int x, int y) -> tile_key_t;
   auto fetch_tile(int z, int x, int y) -> void;
