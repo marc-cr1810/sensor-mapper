@@ -64,6 +64,39 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(stb)
 
+# libtiff
+FetchContent_Declare(
+    tiff
+    GIT_REPOSITORY https://gitlab.com/libtiff/libtiff.git
+    GIT_TAG        v4.5.1
+)
+# Disable unnecessary parts of libtiff to speed up build
+set(tiff-tools OFF CACHE BOOL "" FORCE)
+set(tiff-tests OFF CACHE BOOL "" FORCE)
+set(tiff-docs OFF CACHE BOOL "" FORCE)
+set(tiff-contrib OFF CACHE BOOL "" FORCE)
+FetchContent_MakeAvailable(tiff)
+
+# LAStools (LASlib)
+FetchContent_Declare(
+    lastools
+    GIT_REPOSITORY https://github.com/LAStools/LAStools.git
+    GIT_TAG        master
+)
+# Disable building tools, only library
+set(LAS_TOOLS_WITH_LASZIP ON CACHE BOOL "" FORCE) # Use internal LASzip
+set(BUILD_TOOLS OFF CACHE BOOL "" FORCE) # Try to disable tools (might be named differently)
+FetchContent_MakeAvailable(lastools)
+
+# Patch LASlib includes because standard CMake in LAStools is sometimes broken
+if(TARGET LASlib)
+    target_include_directories(LASlib PUBLIC 
+        ${lastools_SOURCE_DIR}/LASzip/src
+        ${lastools_SOURCE_DIR}/LASzip/include/laszip
+        ${lastools_SOURCE_DIR}/LASlib/inc
+    )
+endif()
+
 # GLAD OpenGL Loader
 FetchContent_Declare(
     glad
@@ -102,6 +135,12 @@ set(SOURCES
   src/core/tdoa_solver.hpp
   src/core/tile_service.cpp
   src/core/tile_service.hpp
+  src/core/terrarium_source.cpp
+  src/core/terrarium_source.hpp
+  src/core/geotiff_source.cpp
+  src/core/geotiff_source.hpp
+  src/core/lidar_source.cpp
+  src/core/lidar_source.hpp
   src/renderer/shader.cpp
   src/renderer/shader.hpp
   src/renderer/gpu_rf_engine.cpp
@@ -132,6 +171,8 @@ target_link_libraries(sensor_mapper PRIVATE
     cpr::cpr
     nlohmann_json::nlohmann_json
     glad
+    tiff
+    LASlib
 )
 
 # ImGui Backend Files (need to be compiled)
