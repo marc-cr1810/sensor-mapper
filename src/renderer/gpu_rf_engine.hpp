@@ -1,6 +1,7 @@
 #pragma once
 
 #include "../core/elevation_service.hpp"
+#include "../core/building_service.hpp"
 #include "../core/rf_engine.hpp" // For coverage_grid_t definition
 #include "../core/sensor.hpp"
 #include "shader.hpp"
@@ -21,7 +22,7 @@ public:
   // We don't return a std::future<coverage_grid> because the result stays on
   // GPU. If we need the CPU data (e.g. for inspection), we'd need glGetTexImage
   // (slow). For visualization, we just need the texture ID.
-  auto render(const std::vector<sensor_t> &sensors, elevation_service_t *elevation_service, double min_lat, double max_lat, double min_lon, double max_lon,
+  auto render(const std::vector<sensor_t> &sensors, elevation_service_t *elevation_service, const building_service_t *building_service, double min_lat, double max_lat, double min_lon, double max_lon,
               float min_signal_dbm = -90.0f) -> unsigned int; // returns Texture ID
 
 private:
@@ -48,7 +49,7 @@ private:
 
   void init_gl();
   void resize_fbo(int width, int height);
-  void update_elevation_texture(elevation_service_t *service, double min_lat, double max_lat, double min_lon, double max_lon);
+  void update_elevation_texture(elevation_service_t *service, const building_service_t *building_service, double min_lat, double max_lat, double min_lon, double max_lon);
   void update_antenna_pattern_texture(const std::vector<sensor_t> &sensors);
 };
 

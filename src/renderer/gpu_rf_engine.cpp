@@ -1,5 +1,6 @@
 #include "gpu_rf_engine.hpp"
 #include "../core/geo_math.hpp"
+#include "../core/rasterizer_utils.hpp"
 #include <glad/glad.h>
 #include <algorithm>
 #include <cmath>
@@ -98,14 +99,15 @@ void gpu_rf_engine_t::resize_fbo(int width, int height)
   glBindFramebuffer(GL_FRAMEBUFFER, 0);
 }
 
-void gpu_rf_engine_t::update_elevation_texture(elevation_service_t *service, double min_lat, double max_lat, double min_lon, double max_lon)
+void gpu_rf_engine_t::update_elevation_texture(elevation_service_t *service, const building_service_t *building_service, double min_lat, double max_lat, double min_lon, double max_lon)
 {
   // Use lower resolution for elevation texture to reduce memory and sampling cost
-  int w = 128;
-  int h = 128;
+  int w = 256; // Increased from 128 for better building resolution
+  int h = 256;
 
-  std::vector<float> data(w * h);
+  std::vector<float> data(w * h, 0.0f);
 
+  // 1. Load Terrain
   for (int y = 0; y < h; ++y)
   {
     double t = (double)y / (h - 1);
@@ -118,17 +120,103 @@ void gpu_rf_engine_t::update_elevation_texture(elevation_service_t *service, dou
       float elev = 0.0f;
       if (service)
         service->get_elevation(lat, lon, elev);
-      // Flip Y coordinate to match OpenGL texture coordinates
-      int flipped_y = (h - 1) - y;
-      data[flipped_y * w + x] = elev;
+
+      // Store in non-flipped buffer first
+      data[y * w + x] = elev;
+    }
+  }
+
+  // 2. Rasterize Buildings (Additive or max? Additive usually (terrain + building height))
+  // But wait, our rasterizer rasterizes into a grid where 0,0 is (min_lon, min_lat)
+  // This matches our loop above (y=0 is min_lat, x=0 is min_lon)
+  if (building_service)
+  {
+    auto buildings = building_service->get_buildings_in_area(min_lat, max_lat, min_lon, max_lon);
+    rasterize_buildings(data, w, h, min_lat, max_lat, min_lon, max_lon, buildings, true); // add_mode = true
+  }
+
+  // 3. Flip Y for OpenGL Upload (0,0 in OpenGL is Bottom-Left, but image data usually Top-Left?
+  // Wait, OpenGL Texture: (0,0) is bottom-left.
+  // Our loop: y=0 is min_lat (South), y=h-1 is max_lat (North).
+  // So data[0] is South-West corner.
+  // Standard glTexImage2D expects data starting from Bottom-Row (0,0) up to Top-Row.
+  // So if data[0] is South (Bottom), we DON'T need to flip if we match UVs correctly.
+
+  // Checking shader:
+  // v_texcoord = (0,0) at bottom-left?
+  // Shader uses v_texcoord directly.
+
+  // Checking previous code:
+  // int flipped_y = (h - 1) - y;
+  // This suggests the previous code assumed data[0] was Top-Left (North)?
+  // Let's look at the previous loop:
+  // y=0 -> t=0 -> lat = min_lat (South).
+  // data[flipped_y] = elev.
+  // So data[h-1] (Last Row) got South data.
+  // data[0] (First Row) got North data.
+  // OpenGL uploads First Row to Bottom.
+  // So Bottom of Texture = North Data.
+  // Top of Texture = South Data.
+  // This seems INVERTED if V=0 is Bottom.
+
+  // Let's stick to standard map coords: V=0 is South, V=1 is North.
+  // If we upload South data first (index 0), then it goes to V=0 (Bottom).
+  // So we should NOT flip if we want V=0=South.
+
+  // HOWEVER, let's respect the previous convention if the shader expects it.
+  // Previous code FLIPPED.
+  // y=0 (South) went to flipped_y=Max (Top of memory).
+  // Memory: [Top/South ... Bottom/North]
+  // Upload: Bottom of Texture gets Top of Memory (South).
+  // So V=0 at Bottom gets South.
+  // So PREVIOUS CODE put South at V=0.
+
+  // My loop above puts y=0 (South) at index 0.
+  // If I upload index 0, it goes to V=0 (Bottom).
+  // So if I DON'T flip, V=0 is South.
+  // This matches!
+
+  // Wait, let's re-read previous code carefully.
+  // int flipped_y = (h - 1) - y;
+  // data[flipped_y * w + x] = elev;
+  // y=0 (South) -> flipped_y = 127 (Last Index).
+  // data[Last] = South.
+  // Buffer: [ ... South ]
+  // glTexImage2D reads array from 0..N.
+  // 0 goes to Bottom row. Last goes to Top row.
+  // So Bottom Row gets data[0] (North).
+  // Top Row gets data[Last] (South).
+  // So V=0 is North, V=1 is South.
+  //
+  // In Shader:
+  // float v = 1.0f - (float)((s.get_latitude() - min_lat) / (max_lat - min_lat));
+  // Latitude: Min(South) -> Max(North).
+  // (lat - min) / range: 0(South) .. 1(North).
+  // v = 1.0 - (0..1) = 1(South) .. 0(North).
+  // So Shader expects V=1 to be South, V=0 to be North.
+  //
+  // So previous code produced V=1 (Top) = South.
+  // Correct.
+
+  // So I need to ensure my buffer has South at the End (High Index).
+  // My loop: y=0 (South) -> index 0.
+  // So I need to flip it to match existing shader logic.
+
+  std::vector<float> flipped_data(w * h);
+  for (int y = 0; y < h; ++y)
+  {
+    for (int x = 0; x < w; ++x)
+    {
+      flipped_data[((h - 1) - y) * w + x] = data[y * w + x];
     }
   }
 
   glBindTexture(GL_TEXTURE_2D, m_elevation_texture);
-  glTexImage2D(GL_TEXTURE_2D, 0, GL_R32F, w, h, 0, GL_RED, GL_FLOAT, data.data());
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_R32F, w, h, 0, GL_RED, GL_FLOAT, flipped_data.data());
 }
 
-auto gpu_rf_engine_t::render(const std::vector<sensor_t> &sensors, elevation_service_t *service, double min_lat, double max_lat, double min_lon, double max_lon, float min_signal_dbm) -> unsigned int
+auto gpu_rf_engine_t::render(const std::vector<sensor_t> &sensors, elevation_service_t *service, const building_service_t *building_service, double min_lat, double max_lat, double min_lon, double max_lon, float min_signal_dbm)
+    -> unsigned int
 {
 
   // Lazy load shader
@@ -367,7 +455,7 @@ void main() {
   }
 
   resize_fbo(resolution, resolution);
-  update_elevation_texture(service, min_lat, max_lat, min_lon, max_lon);
+  update_elevation_texture(service, building_service, min_lat, max_lat, min_lon, max_lon);
 
   // Setup Uniforms
   m_shader->bind();

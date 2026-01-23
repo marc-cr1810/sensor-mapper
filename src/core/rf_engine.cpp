@@ -1,5 +1,6 @@
 #include "rf_engine.hpp"
 #include "geo_math.hpp"
+#include "rasterizer_utils.hpp"
 #include <algorithm>
 #include <cmath>
 #include <iostream>
@@ -51,8 +52,8 @@ auto rf_engine_t::calculate_hata(double d_km, double f_mhz, double h_tx, double 
   }
 }
 
-auto rf_engine_t::compute_coverage(const std::vector<sensor_t> &sensors, elevation_service_t *elevation_service, double min_lat, double max_lat, double min_lon, double max_lon, int width, int height)
-    -> std::future<std::shared_ptr<coverage_grid_t>>
+auto rf_engine_t::compute_coverage(const std::vector<sensor_t> &sensors, elevation_service_t *elevation_service, const building_service_t *building_service, double min_lat, double max_lat, double min_lon, double max_lon, int width,
+                                   int height) -> std::future<std::shared_ptr<coverage_grid_t>>
 {
 
   // Copy sensors to avoid race conditions
@@ -69,6 +70,14 @@ auto rf_engine_t::compute_coverage(const std::vector<sensor_t> &sensors, elevati
                       grid->min_lon = min_lon;
                       grid->max_lon = max_lon;
                       grid->signal_dbm.resize(width * height, -200.0f); // Init to noise
+
+                      // Rasterize Buildings into Clutter Grid
+                      std::vector<float> clutter_grid(width * height, 0.0f);
+                      if (building_service)
+                      {
+                        auto buildings = building_service->get_buildings_in_area(min_lat, max_lat, min_lon, max_lon);
+                        rasterize_buildings(clutter_grid, width, height, min_lat, max_lat, min_lon, max_lon, buildings, false); // max_mode
+                      }
 
                       for (int y = 0; y < height; ++y)
                       {

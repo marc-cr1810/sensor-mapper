@@ -1,6 +1,7 @@
 #pragma once
 
 #include "elevation_service.hpp"
+#include "building_service.hpp"
 #include "sensor.hpp"
 #include <array>
 #include <future>
@@ -28,7 +29,8 @@ public:
   ~rf_engine_t();
 
   // Async coverage calculation
-  auto compute_coverage(const std::vector<sensor_t> &sensors, elevation_service_t *elevation_service, double min_lat, double max_lat, double min_lon, double max_lon, int width, int height) -> std::future<std::shared_ptr<coverage_grid_t>>;
+  auto compute_coverage(const std::vector<sensor_t> &sensors, elevation_service_t *elevation_service, const building_service_t *building_service, double min_lat, double max_lat, double min_lon, double max_lon, int width, int height)
+      -> std::future<std::shared_ptr<coverage_grid_t>>;
 
   // Propagation Models
   static auto calculate_fspl(double d_km, double f_mhz) -> double;
