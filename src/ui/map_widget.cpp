@@ -1269,9 +1269,13 @@ auto map_widget_t::render_gdop_contours(const std::vector<sensor_t> &sensors, Im
   min_lon -= margin_lon;
   max_lon += margin_lon;
 
-  for (int y = 0; y < rows; ++y)
+  // Grid of GDOP values
+  std::vector<double> gdop_grid((rows + 1) * (cols + 1));
+
+  // Pre-calculate GDOP at vertices
+  for (int y = 0; y <= rows; ++y)
   {
-    for (int x = 0; x < cols; ++x)
+    for (int x = 0; x <= cols; ++x)
     {
       float px = canvas_p0.x + x * grid_step;
       float py = canvas_p0.y + y * grid_step;
@@ -1283,35 +1287,158 @@ auto map_widget_t::render_gdop_contours(const std::vector<sensor_t> &sensors, Im
         wx = std::fmod(wx, 1.0) + 1.0;
       if (wx > 1.0)
         wx = std::fmod(wx, 1.0);
-      if (wy < 0.0 || wy > 1.0)
-        continue;
 
       double lat, lon;
-      geo::world_to_lat_lon(wx, wy, lat, lon);
+      bool valid = false;
+      if (wy >= 0.0 && wy <= 1.0)
+      {
+        geo::world_to_lat_lon(wx, wy, lat, lon);
+        if (lat >= min_lat && lat <= max_lat && lon >= min_lon && lon <= max_lon)
+        {
+          gdop_grid[y * (cols + 1) + x] = m_tdoa_solver->calculate_gdop(sensors, lat, lon);
+          valid = true;
+        }
+      }
 
-      if (lat < min_lat || lat > max_lat || lon < min_lon || lon > max_lon)
-        continue;
+      if (!valid)
+      {
+        gdop_grid[y * (cols + 1) + x] = std::numeric_limits<double>::infinity();
+      }
+    }
+  }
 
-      double gdop = m_tdoa_solver->calculate_gdop(sensors, lat, lon);
+  // Marching Squares Thresholds
+  struct ContourLevel
+  {
+    double val;
+    ImU32 color;
+  };
+  std::vector<ContourLevel> levels = {
+      {1.5, IM_COL32(0, 0, 255, 200)},    // Blue
+      {2.0, IM_COL32(0, 255, 255, 200)},  // Cyan
+      {3.0, IM_COL32(0, 255, 0, 200)},    // Green
+      {5.0, IM_COL32(255, 255, 0, 200)},  // Yellow
+      {10.0, IM_COL32(255, 128, 0, 200)}, // Orange
+      {20.0, IM_COL32(255, 0, 0, 200)}    // Red
+  };
 
-      if (std::isinf(gdop))
-        continue;
+  for (const auto &level : levels)
+  {
+    for (int y = 0; y < rows; ++y)
+    {
+      for (int x = 0; x < cols; ++x)
+      {
+        // Indices
+        int i_tl = y * (cols + 1) + x;
+        int i_tr = y * (cols + 1) + (x + 1);
+        int i_br = (y + 1) * (cols + 1) + (x + 1);
+        int i_bl = (y + 1) * (cols + 1) + x;
 
-      ImU32 color;
-      if (gdop < 1.0)
-        color = IM_COL32(0, 0, 255, 100); // Blue
-      else if (gdop < 2.0)
-        color = IM_COL32(0, 255, 255, 100); // Cyan
-      else if (gdop < 5.0)
-        color = IM_COL32(0, 255, 0, 100); // Green
-      else if (gdop < 10.0)
-        color = IM_COL32(255, 255, 0, 100); // Yellow
-      else if (gdop < 20.0)
-        color = IM_COL32(255, 165, 0, 100); // Orange
-      else
-        color = IM_COL32(255, 0, 0, 100); // Red
+        double v_tl = gdop_grid[i_tl];
+        double v_tr = gdop_grid[i_tr];
+        double v_br = gdop_grid[i_br];
+        double v_bl = gdop_grid[i_bl];
 
-      draw_list->AddRectFilled(ImVec2(px, py), ImVec2(px + grid_step, py + grid_step), color);
+        // Check validity
+        if (std::isinf(v_tl) || std::isinf(v_tr) || std::isinf(v_br) || std::isinf(v_bl))
+          continue;
+
+        // Determine state
+        int state = 0;
+        if (v_tl >= level.val)
+          state |= 8;
+        if (v_tr >= level.val)
+          state |= 4;
+        if (v_br >= level.val)
+          state |= 2;
+        if (v_bl >= level.val)
+          state |= 1;
+
+        if (state == 0 || state == 15)
+          continue; // All inside or all outside
+
+        // Interpolation helper
+        auto interp = [&](double v1, double v2, float p1, float p2) -> float
+        {
+          double t = (level.val - v1) / (v2 - v1);
+          return p1 + t * (p2 - p1);
+        };
+
+        // Coordinates
+        float x_l = canvas_p0.x + x * grid_step;
+        float x_r = canvas_p0.x + (x + 1) * grid_step;
+        float y_t = canvas_p0.y + y * grid_step;
+        float y_b = canvas_p0.y + (y + 1) * grid_step;
+
+        ImVec2 p_top = ImVec2(interp(v_tl, v_tr, x_l, x_r), y_t);
+        ImVec2 p_right = ImVec2(x_r, interp(v_tr, v_br, y_t, y_b));
+        ImVec2 p_bottom = ImVec2(interp(v_bl, v_br, x_l, x_r), y_b);
+        ImVec2 p_left = ImVec2(x_l, interp(v_tl, v_bl, y_t, y_b));
+
+        // Marching Squares Lookup Table (Standard)
+        // 1: BL -> L-B
+        // 2: BR -> B-R
+        // 3: BL+BR -> L-R
+        // 4: TR -> T-R
+        // 5: TR+BL -> L-T, B-R (Ambig, simplistic: connect L-T and B-R)
+        // 6: TR+BR -> T-B
+        // 7: TR+BR+BL -> L-T
+        // 8: TL -> T-L
+        // 9: TL+BL -> T-B
+        // 10: TL+BR -> T-R, B-L (Ambig)
+        // 11: TL+BR+BL -> T-R
+        // 12: TL+TR -> L-R
+        // 13: TL+TR+BL -> B-R
+        // 14: TL+TR+BR -> L-B
+
+        switch (state)
+        {
+        case 1:
+          draw_list->AddLine(p_left, p_bottom, level.color, 2.0f);
+          break;
+        case 2:
+          draw_list->AddLine(p_bottom, p_right, level.color, 2.0f);
+          break;
+        case 3:
+          draw_list->AddLine(p_left, p_right, level.color, 2.0f);
+          break;
+        case 4:
+          draw_list->AddLine(p_top, p_right, level.color, 2.0f);
+          break;
+        case 5:
+          draw_list->AddLine(p_left, p_top, level.color, 2.0f);
+          draw_list->AddLine(p_bottom, p_right, level.color, 2.0f);
+          break;
+        case 6:
+          draw_list->AddLine(p_top, p_bottom, level.color, 2.0f);
+          break;
+        case 7:
+          draw_list->AddLine(p_left, p_top, level.color, 2.0f);
+          break;
+        case 8:
+          draw_list->AddLine(p_left, p_top, level.color, 2.0f);
+          break;
+        case 9:
+          draw_list->AddLine(p_top, p_bottom, level.color, 2.0f);
+          break;
+        case 10:
+          draw_list->AddLine(p_top, p_right, level.color, 2.0f);
+          draw_list->AddLine(p_bottom, p_left, level.color, 2.0f);
+          break;
+        case 11:
+          draw_list->AddLine(p_top, p_right, level.color, 2.0f);
+          break;
+        case 12:
+          draw_list->AddLine(p_left, p_right, level.color, 2.0f);
+          break;
+        case 13:
+          draw_list->AddLine(p_bottom, p_right, level.color, 2.0f);
+          break;
+        case 14:
+          draw_list->AddLine(p_left, p_bottom, level.color, 2.0f);
+          break;
+        }
+      }
     }
   }
 }
