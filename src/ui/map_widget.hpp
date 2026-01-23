@@ -206,10 +206,10 @@ private:
   std::unique_ptr<tdoa_solver_t> m_tdoa_solver;
 
   // Rendering helpers
-  auto render_hyperbolas(const std::vector<sensor_t> &sensors, ImDrawList *draw_list) -> void;
-  auto render_gdop_contours(const std::vector<sensor_t> &sensors, ImDrawList *draw_list) -> void;
-  auto render_accuracy_heatmap(const std::vector<sensor_t> &sensors, ImDrawList *draw_list) -> void;
-  auto render_test_point(ImDrawList *draw_list) -> void;
+  auto render_hyperbolas(const std::vector<sensor_t> &sensors, ImDrawList *draw_list, const ImVec2 &canvas_p0, const ImVec2 &canvas_sz) -> void;
+  auto render_gdop_contours(const std::vector<sensor_t> &sensors, ImDrawList *draw_list, const ImVec2 &canvas_p0, const ImVec2 &canvas_sz) -> void;
+  auto render_accuracy_heatmap(const std::vector<sensor_t> &sensors, ImDrawList *draw_list, const ImVec2 &canvas_p0, const ImVec2 &canvas_sz) -> void;
+  auto render_test_point(ImDrawList *draw_list, const ImVec2 &canvas_p0, const ImVec2 &canvas_sz) -> void;
 };
 
 } // namespace sensor_mapper

@@ -61,14 +61,17 @@ auto tdoa_solver_t::solve_position(const std::vector<sensor_t> &sensors, const s
     auto estimated_tdoa = calculate_tdoa(sensors, lat, lon);
 
     // Calculate residuals (error vector)
-    std::vector<double> residuals;
-    residuals.reserve(sensors.size() - 1);
+    // Residual = Measured - Estimated
+    std::vector<double> residuals_m;
+    residuals_m.reserve(sensors.size() - 1);
     for (size_t i = 1; i < sensors.size(); ++i)
     {
-      residuals.push_back(tdoa_ns[i] - estimated_tdoa[i]);
+      // Convert time residual (ns) to distance residual (m)
+      double tdoa_diff = tdoa_ns[i] - estimated_tdoa[i];
+      residuals_m.push_back(tdoa_to_distance(tdoa_diff));
     }
 
-    // Calculate Jacobian
+    // Calculate Jacobian (dRangeDiff / dPosMeters)
     auto J = calculate_jacobian(sensors, lat, lon);
 
     // Solve: (J^T * J) * delta = J^T * residuals
@@ -87,25 +90,29 @@ auto tdoa_solver_t::solve_position(const std::vector<sensor_t> &sensors, const s
     std::vector<double> JT_residuals(2, 0.0);
     for (size_t i = 0; i < JT.size(); ++i)
     {
-      for (size_t j = 0; j < residuals.size(); ++j)
+      for (size_t j = 0; j < residuals_m.size(); ++j)
       {
-        JT_residuals[i] += JT[i][j] * residuals[j];
+        JT_residuals[i] += JT[i][j] * residuals_m[j];
       }
     }
 
     // Calculate delta = JTJ_inv * JT_residuals
-    double delta_lat = (*JTJ_inv)[0][0] * JT_residuals[0] + (*JTJ_inv)[0][1] * JT_residuals[1];
-    double delta_lon = (*JTJ_inv)[1][0] * JT_residuals[0] + (*JTJ_inv)[1][1] * JT_residuals[1];
+    // Delta is now in METERS (North, East)
+    double delta_north_m = (*JTJ_inv)[0][0] * JT_residuals[0] + (*JTJ_inv)[0][1] * JT_residuals[1];
+    double delta_east_m = (*JTJ_inv)[1][0] * JT_residuals[0] + (*JTJ_inv)[1][1] * JT_residuals[1];
 
-    // Update position
-    lat += delta_lat;
-    lon += delta_lon;
+    // Update position (convert meters to degrees)
+    double deg_per_m_lat = 1.0 / 111111.0;
+    double deg_per_m_lon = 1.0 / (111111.0 * std::cos(lat * M_PI / 180.0));
+
+    lat += delta_north_m * deg_per_m_lat;
+    lon += delta_east_m * deg_per_m_lon;
 
     result.iterations = iter + 1;
 
-    // Check convergence
-    double delta_magnitude = std::sqrt(delta_lat * delta_lat + delta_lon * delta_lon);
-    if (delta_magnitude < convergence_threshold)
+    // Check convergence (delta magnitude in meters)
+    double delta_mag_m = std::sqrt(delta_north_m * delta_north_m + delta_east_m * delta_east_m);
+    if (delta_mag_m < 0.01) // Converge when step is < 1cm
     {
       result.converged = true;
       break;
@@ -122,23 +129,47 @@ auto tdoa_solver_t::solve_position(const std::vector<sensor_t> &sensors, const s
 
 auto tdoa_solver_t::calculate_jacobian(const std::vector<sensor_t> &sensors, double lat, double lon) const -> std::vector<std::vector<double>>
 {
-  // Jacobian for TDOA positioning: d(TDOA)/d(lat), d(TDOA)/d(lon)
-  // We have (n-1) TDOA measurements (relative to first sensor)
+  // Jacobian for TDOA positioning: d(RangeDiff)/d(x), d(RangeDiff)/d(y)
+  // We want the Jacobian to be unitless (meters/meters) to get a unitless GDOP.
+  // We will approximate local X/Y derivatives.
 
-  const double epsilon = 1e-6; // Small perturbation in degrees
+  const double epsilon_m = 10.0; // Small perturbation in meters
+  // Approximate degrees per meter
+  // 1 deg Lat ~= 111,111 meters
+  // 1 deg Lon ~= 111,111 * cos(lat) meters
+  const double meters_per_deg_lat = 111111.0;
+  double meters_per_deg_lon = 111111.0 * std::cos(lat * M_PI / 180.0);
+  if (std::abs(meters_per_deg_lon) < 1.0)
+    meters_per_deg_lon = 1.0; // Avoid div/0 at poles
+
+  double d_lat = epsilon_m / meters_per_deg_lat;
+  double d_lon = epsilon_m / meters_per_deg_lon;
 
   std::vector<std::vector<double>> J;
   J.reserve(sensors.size() - 1);
 
+  // We need d(RangeDiff) / d(Pos)
+  // Our calculate_tdoa returns *time difference in nanoseconds*.
+  // We should convert this to *distance difference in meters*.
+
   auto tdoa_at_point = calculate_tdoa(sensors, lat, lon);
-  auto tdoa_lat_plus = calculate_tdoa(sensors, lat + epsilon, lon);
-  auto tdoa_lon_plus = calculate_tdoa(sensors, lat, lon + epsilon);
+  auto tdoa_lat_plus = calculate_tdoa(sensors, lat + d_lat, lon);
+  auto tdoa_lon_plus = calculate_tdoa(sensors, lat, lon + d_lon);
 
   for (size_t i = 1; i < sensors.size(); ++i)
   {
-    double d_tdoa_d_lat = (tdoa_lat_plus[i] - tdoa_at_point[i]) / epsilon;
-    double d_tdoa_d_lon = (tdoa_lon_plus[i] - tdoa_at_point[i]) / epsilon;
-    J.push_back({d_tdoa_d_lat, d_tdoa_d_lon});
+    // Convert time diff (ns) to distance diff (m) before gradient
+    double r_base = tdoa_to_distance(tdoa_at_point[i]);
+    double r_lat = tdoa_to_distance(tdoa_lat_plus[i]);
+    double r_lon = tdoa_to_distance(tdoa_lon_plus[i]);
+
+    // Derivatives: d(RangeDiff) / d(DistanceAlongAxis)
+    double dr_dx = (r_lat - r_base) / epsilon_m; // North-South derivative
+    double dr_dy = (r_lon - r_base) / epsilon_m; // East-West derivative
+
+    // In TDOA, the H matrix row is usually unit vector pointing to sensor i minus unit vector to ref sensor.
+    // This matches d(RangeDiff)/d(Pos).
+    J.push_back({dr_dx, dr_dy});
   }
 
   return J;

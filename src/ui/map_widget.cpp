@@ -1092,6 +1092,13 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors, int &selected_inde
         on_add_sensor(ctx_lat, ctx_lon);
       }
     }
+    if (ImGui::Selectable("Set TDOA Test Point"))
+    {
+      set_tdoa_test_point(ctx_lat, ctx_lon);
+      // Automatically enable analysis and hyperbolas for convenience
+      m_show_tdoa_analysis = true;
+      m_show_hyperbolas = true;
+    }
     ImGui::EndPopup();
   }
 
@@ -1131,6 +1138,22 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors, int &selected_inde
 
   draw_list->AddText(overlay_pos, IM_COL32(0, 0, 0, 255), info_text.c_str());
 
+  // Draw TDOA Layers (Layered below sensors but above map/buildings)
+  if (m_show_tdoa_analysis)
+  {
+    // These might be expensive, so check flags
+    if (m_show_gdop_contours)
+      render_gdop_contours(sensors, draw_list, canvas_p0, canvas_sz);
+
+    if (m_show_accuracy_heatmap)
+      render_accuracy_heatmap(sensors, draw_list, canvas_p0, canvas_sz);
+
+    if (m_show_hyperbolas)
+      render_hyperbolas(sensors, draw_list, canvas_p0, canvas_sz);
+
+    render_test_point(draw_list, canvas_p0, canvas_sz);
+  }
+
   draw_list->PopClipRect();
 }
 
@@ -1140,37 +1163,356 @@ auto map_widget_t::set_tdoa_test_point(double lat, double lon) -> void
   m_test_point_lat = lat;
   m_test_point_lon = lon;
 
-  // Calculate TDOA solution - this will be called when we have the current sensor list
-  // For now, just mark that we have a test point
+  // Force update if needed
 }
 
-auto map_widget_t::render_hyperbolas(const std::vector<sensor_t> &sensors, ImDrawList *draw_list) -> void
+auto map_widget_t::render_hyperbolas(const std::vector<sensor_t> &sensors, ImDrawList *draw_list, const ImVec2 &canvas_p0, const ImVec2 &canvas_sz) -> void
 {
-  if (sensors.size() < 2 || !m_tdoa_solver)
+  if (sensors.size() < 2 || !m_tdoa_solver || !m_has_test_point)
     return;
 
-  (void)draw_list; // Suppress unused parameter warning
-  // Render hyperbolas for each sensor pair
-  // For now, this is a placeholder - full implementation in next phase
+  // Render hyperbolas relative to reference sensor (first selected or index 0)
+  // We'll use the first sensor as the reference for now, consistent with tdoa_solver
+  const auto &ref_sensor = sensors[0];
+
+  // Calculate TDOA for the test point
+  auto test_tdoa = m_tdoa_solver->calculate_tdoa(sensors, m_test_point_lat, m_test_point_lon);
+
+  // Transform coordinates to screen space lambda
+  auto latlon_to_screen = [&](double lat, double lon) -> ImVec2
+  {
+    double wx, wy;
+    geo::lat_lon_to_world(lat, lon, wx, wy);
+
+    // Wrap adjustments relative to center
+    double center_wx, center_wy;
+    geo::lat_lon_to_world(m_center_lat, m_center_lon, center_wx, center_wy);
+
+    if (wx - center_wx > 0.5)
+      wx -= 1.0;
+    if (wx - center_wx < -0.5)
+      wx += 1.0;
+
+    ImVec2 screen_center = ImVec2(canvas_p0.x + canvas_sz.x * 0.5f, canvas_p0.y + canvas_sz.y * 0.5f);
+
+    double tile_size = 256.0;
+    double world_size_pixels = std::pow(2.0, m_zoom) * tile_size;
+
+    float px = static_cast<float>((wx - center_wx) * world_size_pixels + screen_center.x);
+    float py = static_cast<float>((wy - center_wy) * world_size_pixels + screen_center.y);
+    return ImVec2(px, py);
+  };
+
+  // Draw hyperbola for each sensor pair (Sensor i vs Reference Sensor 0)
+  for (size_t i = 1; i < sensors.size(); ++i)
+  {
+    double tdoa_ns = test_tdoa[i]; // TDOA relative to sensor 0
+
+    // Sample hyperbola points
+    // We want enough samples to look smooth on screen
+    auto points = m_tdoa_solver->sample_hyperbola(ref_sensor, sensors[i], tdoa_ns, 200);
+
+    if (points.size() < 2)
+      continue;
+
+    std::vector<ImVec2> screen_points;
+    screen_points.reserve(points.size());
+
+    for (const auto &pt : points)
+    {
+      screen_points.push_back(latlon_to_screen(pt.first, pt.second));
+    }
+
+    // Draw curve
+    // Use a distinct color for each pair or uniform?
+    // Let's use Cyan or a distinct TDOA color
+    draw_list->AddPolyline(screen_points.data(), screen_points.size(), IM_COL32(0, 255, 255, 200), false, 2.0f);
+  }
 }
 
-auto map_widget_t::render_gdop_contours(const std::vector<sensor_t> &sensors, ImDrawList *draw_list) -> void
+auto map_widget_t::render_gdop_contours(const std::vector<sensor_t> &sensors, ImDrawList *draw_list, const ImVec2 &canvas_p0, const ImVec2 &canvas_sz) -> void
 {
-  (void)sensors;   // Suppress unused parameter warning
-  (void)draw_list; // Suppress unused parameter warning
-  // GDOP contour rendering - placeholder for now
+  if (sensors.size() < 3 || !m_tdoa_solver)
+    return;
+
+  if (canvas_sz.x < 1.0f || canvas_sz.y < 1.0f)
+    return;
+
+  const float grid_step = 20.0f;
+  int cols = static_cast<int>(canvas_sz.x / grid_step) + 1;
+  int rows = static_cast<int>(canvas_sz.y / grid_step) + 1;
+
+  double center_wx, center_wy;
+  geo::lat_lon_to_world(m_center_lat, m_center_lon, center_wx, center_wy);
+  double tile_size = 256.0;
+  double world_size_pixels = std::pow(2.0, m_zoom) * tile_size;
+  ImVec2 screen_center = ImVec2(canvas_p0.x + canvas_sz.x * 0.5f, canvas_p0.y + canvas_sz.y * 0.5f);
+
+  // Calculate sensor bounding box
+  double min_lat = 90.0, max_lat = -90.0;
+  double min_lon = 180.0, max_lon = -180.0;
+  for (const auto &s : sensors)
+  {
+    min_lat = std::min(min_lat, s.get_latitude());
+    max_lat = std::max(max_lat, s.get_latitude());
+    min_lon = std::min(min_lon, s.get_longitude());
+    max_lon = std::max(max_lon, s.get_longitude());
+  }
+  double lat_span = max_lat - min_lat;
+  double lon_span = max_lon - min_lon;
+  double margin_lat = std::max(lat_span * 2.0, 0.5);
+  double margin_lon = std::max(lon_span * 2.0, 0.5);
+  min_lat -= margin_lat;
+  max_lat += margin_lat;
+  min_lon -= margin_lon;
+  max_lon += margin_lon;
+
+  for (int y = 0; y < rows; ++y)
+  {
+    for (int x = 0; x < cols; ++x)
+    {
+      float px = canvas_p0.x + x * grid_step;
+      float py = canvas_p0.y + y * grid_step;
+
+      double wx = center_wx + (px - screen_center.x) / world_size_pixels;
+      double wy = center_wy + (py - screen_center.y) / world_size_pixels;
+
+      if (wx < 0.0)
+        wx = std::fmod(wx, 1.0) + 1.0;
+      if (wx > 1.0)
+        wx = std::fmod(wx, 1.0);
+      if (wy < 0.0 || wy > 1.0)
+        continue;
+
+      double lat, lon;
+      geo::world_to_lat_lon(wx, wy, lat, lon);
+
+      if (lat < min_lat || lat > max_lat || lon < min_lon || lon > max_lon)
+        continue;
+
+      double gdop = m_tdoa_solver->calculate_gdop(sensors, lat, lon);
+
+      if (std::isinf(gdop))
+        continue;
+
+      ImU32 color;
+      if (gdop < 1.0)
+        color = IM_COL32(0, 0, 255, 100); // Blue
+      else if (gdop < 2.0)
+        color = IM_COL32(0, 255, 255, 100); // Cyan
+      else if (gdop < 5.0)
+        color = IM_COL32(0, 255, 0, 100); // Green
+      else if (gdop < 10.0)
+        color = IM_COL32(255, 255, 0, 100); // Yellow
+      else if (gdop < 20.0)
+        color = IM_COL32(255, 165, 0, 100); // Orange
+      else
+        color = IM_COL32(255, 0, 0, 100); // Red
+
+      draw_list->AddRectFilled(ImVec2(px, py), ImVec2(px + grid_step, py + grid_step), color);
+    }
+  }
 }
 
-auto map_widget_t::render_accuracy_heatmap(const std::vector<sensor_t> &sensors, ImDrawList *draw_list) -> void
+auto map_widget_t::render_accuracy_heatmap(const std::vector<sensor_t> &sensors, ImDrawList *draw_list, const ImVec2 &canvas_p0, const ImVec2 &canvas_sz) -> void
 {
-  (void)sensors;   // Suppress unused parameter warning
-  (void)draw_list; // Suppress unused parameter warning
-  // Accuracy heatmap rendering - placeholder for now
+  if (sensors.size() < 3 || !m_tdoa_solver)
+    return;
+
+  if (canvas_sz.x < 1.0f || canvas_sz.y < 1.0f)
+    return;
+
+  const float grid_step = 20.0f;
+  int cols = static_cast<int>(canvas_sz.x / grid_step) + 1;
+  int rows = static_cast<int>(canvas_sz.y / grid_step) + 1;
+
+  double center_wx, center_wy;
+  geo::lat_lon_to_world(m_center_lat, m_center_lon, center_wx, center_wy);
+  double tile_size = 256.0;
+  double world_size_pixels = std::pow(2.0, m_zoom) * tile_size;
+  ImVec2 screen_center = ImVec2(canvas_p0.x + canvas_sz.x * 0.5f, canvas_p0.y + canvas_sz.y * 0.5f);
+
+  double jitter = static_cast<double>(m_timing_jitter_ns);
+
+  // Calculate sensor bounding box to constrain visualization
+  double min_lat = 90.0, max_lat = -90.0;
+  double min_lon = 180.0, max_lon = -180.0;
+  for (const auto &s : sensors)
+  {
+    min_lat = std::min(min_lat, s.get_latitude());
+    max_lat = std::max(max_lat, s.get_latitude());
+    min_lon = std::min(min_lon, s.get_longitude());
+    max_lon = std::max(max_lon, s.get_longitude());
+  }
+
+  // Extend bounding box by factor of span, or minimum distance (e.g. 50km)
+  double lat_span = max_lat - min_lat;
+  double lon_span = max_lon - min_lon;
+  double margin_lat = std::max(lat_span * 2.0, 0.5); // At least 0.5 degrees (~55km)
+  double margin_lon = std::max(lon_span * 2.0, 0.5);
+
+  min_lat -= margin_lat;
+  max_lat += margin_lat;
+  min_lon -= margin_lon;
+  max_lon += margin_lon;
+
+  auto should_render = [&](double lat, double lon) -> bool { return lat >= min_lat && lat <= max_lat && lon >= min_lon && lon <= max_lon; };
+
+  // Calculate errors at grid points first to allow interpolation
+  // We need one extra point row/col for the grid
+  std::vector<double> errors_grid;
+  errors_grid.resize((rows + 1) * (cols + 1));
+
+  // Pre-calculate errors at vertices
+  for (int y = 0; y <= rows; ++y)
+  {
+    for (int x = 0; x <= cols; ++x)
+    {
+      float px = canvas_p0.x + x * grid_step;
+      float py = canvas_p0.y + y * grid_step;
+
+      double wx = center_wx + (px - screen_center.x) / world_size_pixels;
+      double wy = center_wy + (py - screen_center.y) / world_size_pixels;
+
+      // Wrap stuff
+      // Ideally we should handle wrapping seamlessly, but for now simple clamp/wrap for the query
+      if (wx < 0.0)
+        wx = std::fmod(wx, 1.0) + 1.0;
+      if (wx > 1.0)
+        wx = std::fmod(wx, 1.0);
+
+      double lat, lon;
+      if (wy >= 0.0 && wy <= 1.0)
+      {
+        geo::world_to_lat_lon(wx, wy, lat, lon);
+        if (should_render(lat, lon))
+        {
+          errors_grid[y * (cols + 1) + x] = m_tdoa_solver->estimate_positioning_error(sensors, lat, lon, jitter);
+        }
+        else
+        {
+          errors_grid[y * (cols + 1) + x] = std::numeric_limits<double>::infinity();
+        }
+      }
+      else
+      {
+        errors_grid[y * (cols + 1) + x] = std::numeric_limits<double>::infinity();
+      }
+    }
+  }
+
+  // Lambda to map error to color
+  auto error_to_col = [](double err) -> ImU32
+  {
+    if (std::isinf(err))
+      return IM_COL32(0, 0, 0, 0);
+
+    // Color Scale: Green -> Yellow -> Red -> Transparent
+    int r, g, b, a;
+
+    // Clip at high error to avoid drawing huge red blobs everywhere
+    if (err > 500.0)
+      return IM_COL32(255, 0, 0, 0); // Fade out completely
+
+    int base_alpha = 120;
+
+    if (err < 10.0)
+    {
+      // Deep Green to Green
+      r = 0;
+      g = 255;
+      b = 0;
+      a = base_alpha;
+    }
+    else if (err < 50.0)
+    {
+      // Green to Yellow
+      float t = (float)(err - 10.0) / 40.0f;
+      r = (int)(t * 255.0f);
+      g = 255;
+      b = 0;
+      a = base_alpha;
+    }
+    else if (err < 200.0)
+    {
+      // Yellow to Red
+      float t = (float)(err - 50.0) / 150.0f;
+      r = 255;
+      g = (int)((1.0f - t) * 255.0f);
+      b = 0;
+      a = base_alpha;
+    }
+    else
+    {
+      // Red fading out
+      r = 255;
+      g = 0;
+      b = 0;
+      float t = (float)(err - 200.0) / 300.0f; // Fade out over next 300m
+      a = (int)(base_alpha * (1.0f - t));
+      if (a < 0)
+        a = 0;
+    }
+    return IM_COL32(r, g, b, a);
+  };
+
+  // Draw interpolated quads
+  for (int y = 0; y < rows; ++y)
+  {
+    for (int x = 0; x < cols; ++x)
+    {
+      float px = canvas_p0.x + x * grid_step;
+      float py = canvas_p0.y + y * grid_step;
+
+      ImU32 c_tl = error_to_col(errors_grid[y * (cols + 1) + x]);
+      ImU32 c_tr = error_to_col(errors_grid[y * (cols + 1) + (x + 1)]);
+      ImU32 c_bl = error_to_col(errors_grid[(y + 1) * (cols + 1) + x]);
+      ImU32 c_br = error_to_col(errors_grid[(y + 1) * (cols + 1) + (x + 1)]);
+
+      // Optimization: Don't draw if all transparent
+      if ((c_tl >> 24) == 0 && (c_tr >> 24) == 0 && (c_bl >> 24) == 0 && (c_br >> 24) == 0)
+        continue;
+
+      draw_list->AddRectFilledMultiColor(ImVec2(px, py), ImVec2(px + grid_step, py + grid_step), c_tl, c_tr, c_br, c_bl);
+    }
+  }
 }
 
-auto map_widget_t::render_test_point(ImDrawList *draw_list) -> void
+auto map_widget_t::render_test_point(ImDrawList *draw_list, const ImVec2 &canvas_p0, const ImVec2 &canvas_sz) -> void
 {
-  // Test point rendering - placeholder for now
-}
+  if (!m_has_test_point)
+    return;
+
+  // Calculate screen position
+  double wx, wy;
+  geo::lat_lon_to_world(m_test_point_lat, m_test_point_lon, wx, wy);
+
+  double center_wx, center_wy;
+  geo::lat_lon_to_world(m_center_lat, m_center_lon, center_wx, center_wy);
+
+  if (wx - center_wx > 0.5)
+    wx -= 1.0;
+  if (wx - center_wx < -0.5)
+    wx += 1.0;
+
+  // Utilize passed canvas metrics
+  ImVec2 screen_center = ImVec2(canvas_p0.x + canvas_sz.x * 0.5f, canvas_p0.y + canvas_sz.y * 0.5f);
+
+  double tile_size = 256.0;
+  double world_size_pixels = std::pow(2.0, m_zoom) * tile_size;
+
+  float px = static_cast<float>((wx - center_wx) * world_size_pixels + screen_center.x);
+  float py = static_cast<float>((wy - center_wy) * world_size_pixels + screen_center.y);
+
+  // Draw Target Marker (Crosshair)
+  float size = 10.0f;
+  draw_list->AddLine(ImVec2(px - size, py), ImVec2(px + size, py), IM_COL32(255, 255, 255, 255), 2.0f);
+  draw_list->AddLine(ImVec2(px, py - size), ImVec2(px, py + size), IM_COL32(255, 255, 255, 255), 2.0f);
+  draw_list->AddCircle(ImVec2(px, py), size * 0.6f, IM_COL32(255, 0, 0, 255), 0, 2.0f);
+
+  // Label?
+  // draw_list->AddText(ImVec2(px + size, py + size), IM_COL32(255, 255, 255, 255), "Test Pt");
+
+} // function
 
 } // namespace sensor_mapper
