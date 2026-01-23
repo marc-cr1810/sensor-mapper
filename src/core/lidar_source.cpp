@@ -5,6 +5,10 @@
 #include <algorithm>
 #include <limits>
 
+#ifdef HAVE_PROJ
+#include <proj.h>
+#endif
+
 namespace sensor_mapper
 {
 
@@ -15,6 +19,16 @@ lidar_source_t::lidar_source_t(const std::filesystem::path &path) : m_path(path)
 
 lidar_source_t::~lidar_source_t()
 {
+#ifdef HAVE_PROJ
+  if (m_transformation)
+  {
+    proj_destroy(static_cast<PJ *>(m_transformation));
+  }
+  if (m_proj_ctx)
+  {
+    proj_context_destroy(static_cast<PJ_CONTEXT *>(m_proj_ctx));
+  }
+#endif
 }
 
 auto lidar_source_t::load() -> bool
@@ -80,6 +94,93 @@ auto lidar_source_t::load() -> bool
   lasreader->close();
   delete lasreader;
 
+#ifdef HAVE_PROJ
+  // Initialize PROJ for coordinate transformations
+  m_proj_ctx = proj_context_create();
+
+  // Try to determine the CRS from the LAS header
+  std::string source_crs_str;
+  const char *source_crs = nullptr;
+
+  // 1. Check for OGC WKT (LAS 1.4+)
+  if (lasreader->header.vlr_geo_ogc_wkt != nullptr)
+  {
+    source_crs = lasreader->header.vlr_geo_ogc_wkt;
+    std::cout << "LIDAR: Found OGC WKT in header" << std::endl;
+  }
+  // 2. Check for GeoKeys (LAS < 1.4 or backward compat)
+  else if (lasreader->header.vlr_geo_keys && lasreader->header.vlr_geo_key_entries)
+  {
+    for (int i = 0; i < lasreader->header.vlr_geo_keys->number_of_keys; i++)
+    {
+      const auto &key = lasreader->header.vlr_geo_key_entries[i];
+      // 3072 = ProjectedCSTypeGeoKey
+      if (key.key_id == 3072)
+      {
+        if (key.tiff_tag_location == 0 && key.count == 1)
+        {
+          source_crs_str = "EPSG:" + std::to_string(key.value_offset);
+          source_crs = source_crs_str.c_str();
+          std::cout << "LIDAR: Found ProjectedCSTypeGeoKey: " << source_crs_str << std::endl;
+          break;
+        }
+      }
+    }
+  }
+
+  // Fallback: Check if coordinates look like they need projection but we found no CRS
+  if (!source_crs && (m_max_x > 180.0 || m_min_x < -180.0 || m_max_y > 90.0 || m_min_y < -90.0))
+  {
+    std::cerr << "LIDAR: Warning: Coordinates appear to be projected (not lat/lon) but no CRS found in header." << std::endl;
+    std::cerr << "LIDAR: Use las2las to add CRS info, e.g. 'las2las -i input.las -epsg 28355 -o output.las'" << std::endl;
+  }
+
+  if (source_crs)
+  {
+    PJ *transform = proj_create_crs_to_crs(static_cast<PJ_CONTEXT *>(m_proj_ctx),
+                                           source_crs,  // File's CRS
+                                           "EPSG:4326", // WGS84 (lat/lon)
+                                           nullptr);
+
+    if (transform)
+    {
+      // We want to transform FROM source TO WGS84, but proj_trans with PJ_FWD does Source -> Target
+      // Our member is m_transformation.
+      // Wait, let's double check usage in get_elevation.
+      // get_elevation calls proj_trans(..., PJ_FWD, input) where input is WGS84 (lat/lon).
+      // So we need a transformer from WGS84 -> Source (inverse of what we just created or swap args)
+
+      // Let's create WGS84 -> Source
+      m_transformation = proj_create_crs_to_crs(static_cast<PJ_CONTEXT *>(m_proj_ctx),
+                                                "EPSG:4326", // Source: WGS84
+                                                source_crs,  // Target: File CRS
+                                                nullptr);
+      if (m_transformation)
+      {
+        m_has_valid_crs = true;
+        std::cout << "LIDAR: Created coordinate transformation (WGS84 -> " << (source_crs ? source_crs : "unknown") << ")" << std::endl;
+      }
+      else
+      {
+        std::cerr << "LIDAR: Failed to create PROJ transformation." << std::endl;
+      }
+    }
+    else
+    {
+      std::cerr << "LIDAR: Failed to parse source CRS: " << source_crs << std::endl;
+    }
+  }
+  else
+  {
+    // Lat/Lon or unknown
+    m_has_valid_crs = false;
+    if (m_max_x <= 180.0 && m_min_x >= -180.0 && m_max_y <= 90.0 && m_min_y >= -90.0)
+    {
+      std::cout << "LIDAR: File appears to be in lat/lon coordinates" << std::endl;
+    }
+  }
+#endif
+
   m_loaded = true;
   std::cout << "Loaded LIDAR: " << m_path << " (" << m_width << "x" << m_height << ")" << std::endl;
   return true;
@@ -95,72 +196,52 @@ auto lidar_source_t::get_elevation(double lat, double lon, float &out_height) ->
   if (!m_loaded)
     return false;
 
-  // Coordinate System Issue:
-  // LAS files are usually in a projected coordinate system (UTM, State Plane), not Lat/Lon.
-  // We don't have PROJ, so we can't easily convert Lat/Lon input to LAS Project Coords.
-  // HOWEVER, for this proof of concept, we assume:
-  // 1. Input lat/lon is converted to World Meters by the caller (ElevationService usually takes Lat/Lon?)
-  // Wait, ElevationService takes Lat/Lon.
-  // If the LAS file is in UTM, and we pass Lat/Lon, we will just get garbage.
-  // Ideally, we'd need to reproject.
-  // OR, we assume the LAS file IS already georeferenced or we blindly map input Lat/Lon to it if it matches?
-  //
-  // Actually, `ElevationService::get_elevation` takes Lat/Lon.
-  // `Terrarium` works because it takes Lat/Lon.
-  //
-  // If the USER loads a local LAS file, they likely expect it to appear "somewhere".
-  // Without PROJ, we can't place it correctly on the globe unless we know the offset.
-  //
-  // Workaround: We will assume the LAS coordinates are "World Meters" relative to the map origin?
-  // OR we just implementation the lookup and warn the user.
-  //
-  // Let's implement the lookup assuming Lat/Lon IS the input, but we need to convert that to the LAS bounds.
-  // If the LAS bounds are huge (e.g. 500,000), it's UTM.
-  // If small (-180..180), it's Lat/Lon.
-  //
-  // Let's check bounds.
-
-  bool is_lat_lon = (m_min_x >= -180.0 && m_max_x <= 180.0 && m_min_y >= -90.0 && m_max_y <= 90.0);
-
   double x, y;
-  if (is_lat_lon)
+
+#ifdef HAVE_PROJ
+  // If we have a valid transformation, use it
+  if (m_has_valid_crs && m_transformation)
   {
-    x = lon;
-    y = lat;
+    // Transform from WGS84 (lat/lon) to file's CRS
+    PJ_COORD input, output;
+    input.lpzt.lam = lon; // Longitude
+    input.lpzt.phi = lat; // Latitude
+    input.lpzt.z = 0;
+    input.lpzt.t = 0;
+
+    output = proj_trans(static_cast<PJ *>(m_transformation), PJ_FWD, input);
+
+    // Check if transformation failed
+    if (output.xy.x == HUGE_VAL || output.xy.y == HUGE_VAL)
+    {
+      return false;
+    }
+
+    x = output.xy.x;
+    y = output.xy.y;
   }
   else
   {
-    // It's likely Projected Meters.
-    // We cannot convert Lat/Lon to arbitrary Projected Meters without PROJ.
-    // So this method will likely FAIL to match unless our application world coordinates align.
-    // But the interface is get_elevation(lat, lon).
-    // We'll just return false if we can't map it, or try to map roughly?
-    // No, let's just create a placeholder logic.
-    //
-    // Actually, standard `ElevationService` converts Lat/Lon to World Meters:
-    // geo::lat_lon_to_world(lat, lon, wx, wy).
-    // Maybe we compare wx, wy to the LAS bounds?
-    // If the LAS is in the same Mercator projection as our world, it fits!
-    //
-    // Let's try converting input Lat/Lon to standard Web Mercator (which is what mapbox/osm/terrarium use).
-    // If the LAS file was exported in Web Mercator (EPSG:3857), it will align.
-    // If it's UTM, it won't.
+    // No transformation, assume file is in lat/lon
+    x = lon;
+    y = lat;
+  }
+#else
+  // Without PROJ, only support lat/lon files
+  // Simple heuristic check
+  bool is_lat_lon = (m_min_x >= -180.0 && m_max_x <= 180.0 && m_min_y >= -90.0 && m_max_y <= 90.0);
 
-    // We need `geo::lat_lon_to_world` logic here?
-    // No, I can't access `geo::lat_lon_to_world` easily without including `geo_math.hpp`.
-    // I should include it.
-    return false; // Implementing minimal placeholder logic for now.
+  if (!is_lat_lon)
+  {
+    // File is in projected coordinates but we can't transform
+    return false;
   }
 
-  // Logic if coordinates match (Assuming LAS is Lat/Lon for now for simplicity, or we add reprojection later)
-  // pixel_x = (x - min_x) / cell_size
-  // pixel_y = (max_y - y) / cell_size (Y flips?)
-  //
-  // If it's Lat/Lon, cell_size should be in degrees (approx 0.00001).
-  // If my cell_size was set to 1.0 (meter), and coordinates are degrees, this breaks.
-  //
-  // Fix: Check units.
+  x = lon;
+  y = lat;
+#endif
 
+  // Look up in rasterized grid
   double px = (x - m_min_x) / m_cell_size;
   double py = (m_max_y - y) / m_cell_size;
 

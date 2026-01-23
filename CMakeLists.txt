@@ -86,15 +86,16 @@ FetchContent_Declare(
 # Disable building tools, only library
 set(LAS_TOOLS_WITH_LASZIP ON CACHE BOOL "" FORCE) # Use internal LASzip
 set(BUILD_TOOLS OFF CACHE BOOL "" FORCE) # Try to disable tools (might be named differently)
-FetchContent_MakeAvailable(lastools)
-
-# Patch LASlib includes because standard CMake in LAStools is sometimes broken
-if(TARGET LASlib)
-    target_include_directories(LASlib PUBLIC 
-        ${lastools_SOURCE_DIR}/LASzip/src
-        ${lastools_SOURCE_DIR}/LASzip/include/laszip
-        ${lastools_SOURCE_DIR}/LASlib/inc
-    )
+FetchContent_GetProperties(lastools)
+if(NOT lastools_POPULATED)
+  FetchContent_Populate(lastools)
+  # Add include directories before including the subdirectory
+  include_directories(SYSTEM
+    ${lastools_SOURCE_DIR}/LASzip/src
+    ${lastools_SOURCE_DIR}/LASzip/include/laszip
+    ${lastools_SOURCE_DIR}/LASlib/inc
+  )
+  add_subdirectory(${lastools_SOURCE_DIR} ${lastools_BINARY_DIR})
 endif()
 
 # GLAD OpenGL Loader
@@ -112,6 +113,17 @@ FetchContent_Declare(
     GIT_TAG        v3.11.2
 )
 FetchContent_MakeAvailable(json)
+
+# PROJ for coordinate transformations (optional)
+find_package(PROJ QUIET)
+if(PROJ_FOUND)
+    message(STATUS "PROJ found: ${PROJ_VERSION}")
+    set(HAVE_PROJ TRUE)
+else()
+    message(WARNING "PROJ not found - LIDAR will only work with lat/lon coordinates")
+    message(WARNING "Install with: sudo apt install libproj-dev")
+    set(HAVE_PROJ FALSE)
+endif()
 
 # Source Files
 set(SOURCES
@@ -163,6 +175,8 @@ target_include_directories(sensor_mapper PRIVATE
     ${imgui_SOURCE_DIR}/backends
     ${stb_SOURCE_DIR}
     ${glad_SOURCE_DIR}/include
+    ${lastools_SOURCE_DIR}/LASzip/src
+    ${lastools_SOURCE_DIR}/LASlib/inc
 )
 
 # Link Libraries
@@ -174,6 +188,12 @@ target_link_libraries(sensor_mapper PRIVATE
     tiff
     LASlib
 )
+
+# Add PROJ if available
+if(HAVE_PROJ)
+    target_link_libraries(sensor_mapper PRIVATE PROJ::proj)
+    target_compile_definitions(sensor_mapper PRIVATE HAVE_PROJ)
+endif()
 
 # ImGui Backend Files (need to be compiled)
 target_sources(sensor_mapper PRIVATE

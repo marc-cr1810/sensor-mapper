@@ -20,6 +20,15 @@ public:
   auto add_source(std::shared_ptr<elevation_source_t> source) -> void;
   auto load_local_file(const std::string &path) -> bool;
 
+  auto get_sources() const -> const std::vector<std::shared_ptr<elevation_source_t>> &
+  {
+    return m_sources;
+  }
+  auto get_source_count() const -> size_t
+  {
+    return m_sources.size();
+  }
+
 private:
   std::vector<std::shared_ptr<elevation_source_t>> m_sources;
 };

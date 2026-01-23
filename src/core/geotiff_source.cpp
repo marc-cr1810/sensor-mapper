@@ -31,19 +31,28 @@ auto geotiff_source_t::load() -> bool
   m_width = w;
   m_height = h;
 
+// Initialize GeoTIFF extensions (registers custom tags)
+// Note: This is a no-op if already initialized
+#ifdef TIFFTAG_GEOPIXELSCALE
+// If we have GeoTIFF support built-in, use it
+#else
+// Otherwise we need to handle the tags manually
+#endif
+
   // Read Georeferencing Tags
   // ModelPixelScaleTag (33550) = [ScaleX, ScaleY, ScaleZ]
+  uint16_t count = 0;
   double *model_pixel_scale = nullptr;
-  if (TIFFGetField(tif, 33550, &model_pixel_scale))
+  if (TIFFGetField(tif, 33550, &count, &model_pixel_scale) && count >= 3)
   {
     m_scale_x = model_pixel_scale[0];
-    m_scale_y = model_pixel_scale[1]; // Typically negative?
+    m_scale_y = model_pixel_scale[1];
   }
 
   // ModelTiepointTag (33922) = [I, J, K, X, Y, Z] (Mapping Raster 0,0 to World X,Y)
   double *model_tiepoint = nullptr;
-  int count = 0;
-  if (TIFFGetField(tif, 33922, &count, &model_tiepoint) && count >= 6)
+  uint16_t tie_count = 0;
+  if (TIFFGetField(tif, 33922, &tie_count, &model_tiepoint) && tie_count >= 6)
   {
     m_origin_x = model_tiepoint[3];
     m_origin_y = model_tiepoint[4];

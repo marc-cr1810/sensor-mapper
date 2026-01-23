@@ -448,6 +448,94 @@ void render_ui(map_widget_t &map, std::vector<sensor_t> &sensors, int &selected_
   }
   ImGui::End();
 
+  // Elevation Data Panel
+  if (ImGui::Begin("Elevation Data"))
+  {
+    ImGui::TextDisabled("LOCAL ELEVATION FILES");
+    ImGui::Separator();
+
+    // File path input
+    static char file_path_buffer[512] = "";
+    static std::string status_message = "";
+    static bool status_is_error = false;
+
+    ImGui::Text("Load GeoTIFF (.tif, .tiff) or LIDAR (.las, .laz):");
+    ImGui::SetNextItemWidth(-100.0f);
+    ImGui::InputText("##filepath", file_path_buffer, sizeof(file_path_buffer));
+    ImGui::SameLine();
+
+    if (ImGui::Button("Load File"))
+    {
+      std::string path(file_path_buffer);
+      if (!path.empty())
+      {
+        if (elevation_service.load_local_file(path))
+        {
+          status_message = "✓ Successfully loaded: " + path;
+          status_is_error = false;
+          map.invalidate_rf_heatmap(); // Invalidate heatmap to use new elevation data
+        }
+        else
+        {
+          status_message = "✗ Failed to load file (unsupported format or file not found)";
+          status_is_error = true;
+        }
+      }
+      else
+      {
+        status_message = "✗ Please enter a file path";
+        status_is_error = true;
+      }
+    }
+
+    // Display status message
+    if (!status_message.empty())
+    {
+      ImVec4 color = status_is_error ? ImVec4(1.0f, 0.3f, 0.3f, 1.0f) : ImVec4(0.3f, 1.0f, 0.3f, 1.0f);
+      ImGui::TextColored(color, "%s", status_message.c_str());
+    }
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::TextDisabled("ACTIVE SOURCES");
+
+    // List active elevation sources
+    auto &sources = elevation_service.get_sources();
+    if (sources.empty())
+    {
+      ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "No elevation sources loaded");
+    }
+    else
+    {
+      ImGui::Text("Total sources: %zu", sources.size());
+      ImGui::Spacing();
+
+      if (ImGui::BeginChild("##sources_list", ImVec2(0, 100), true))
+      {
+        for (size_t i = 0; i < sources.size(); ++i)
+        {
+          if (sources[i])
+          {
+            // Show index (in reverse order since LIFO priority)
+            size_t priority = sources.size() - i;
+            ImGui::Text("[%zu] %s", priority, sources[i]->get_name());
+          }
+        }
+      }
+      ImGui::EndChild();
+
+      ImGui::Spacing();
+      ImGui::TextColored(ImVec4(0.7f, 0.9f, 1.0f, 1.0f), "ℹ Sources are queried in reverse order (last loaded = highest priority)");
+    }
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::TextDisabled("LIMITATIONS");
+    ImGui::TextWrapped("• LIDAR files must use lat/lon coordinates (not UTM/State Plane)");
+    ImGui::TextWrapped("• Coordinate reprojection is not currently supported");
+  }
+  ImGui::End();
+
   // TDOA Analysis Panel
   if (ImGui::Begin("TDOA Analysis"))
   {

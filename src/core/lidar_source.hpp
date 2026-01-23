@@ -40,6 +40,13 @@ private:
   double m_cell_size = 1.0; // Meters per pixel (default)
 
   bool m_loaded = false;
+
+#ifdef HAVE_PROJ
+  // PROJ transformation context
+  void *m_proj_ctx = nullptr;       // PJ_CONTEXT*
+  void *m_transformation = nullptr; // PJ* - transforms WGS84 -> file CRS
+  bool m_has_valid_crs = false;
+#endif
 };
 
 } // namespace sensor_mapper
