@@ -244,32 +244,75 @@ auto tdoa_solver_t::sample_hyperbola(const sensor_t &sensor1, const sensor_t &se
 
   // Sample the hyperbola
   // Use parametric approach: sample along a line perpendicular to baseline
+  // Sample the hyperbola
+  // Use parametric approach: sample along a line perpendicular to baseline
   double b = std::sqrt(c * c - a * a); // Semi-minor axis
 
   points.reserve(num_samples);
 
+  // Increase range to cover more area (t=5 is approx 74x scale, t=6 is 200x)
+  double t_range = 6.0;
+
   for (int i = 0; i < num_samples; ++i)
   {
-    // Sample parameter t from -range to +range
-    double t = -3.0 + (6.0 * i / (num_samples - 1)); // Sample around hyperbola
+    // Sample parameter t
+    double t = -t_range + (2.0 * t_range * i / (num_samples - 1));
 
     // Hyperbola equation: x = ±a*cosh(t), y = b*sinh(t)
-    // We'll sample both branches
-    for (int branch = -1; branch <= 1; branch += 2)
-    {
-      double x = branch * a * std::cosh(t); // Along baseline direction
-      double y = b * std::sinh(t);          // Perpendicular to baseline
+    // x is along the major axis (baseline) relative to the center
+    // We only care about the branch closer to the "closer" sensor?
+    // TDOA defines specific time diff -> specific branch.
+    // If tdoa_ns > 0, distance_diff > 0.
+    // distance_diff = d1 - d2.
+    // If d1 > d2 (positive diff), point is closer to sensor 2.
+    // If d1 < d2 (negative diff), point is closer to sensor 1.
+    // Standard hyperbola x^2/a^2 - y^2/b^2 = 1.
+    // Branch +: x > 0. Branch -: x < 0.
+    // Center is (0,0). Foci at (+c, 0) and (-c, 0).
+    // Let's assume sensor 2 is at +c and sensor 1 is at -c?
+    // Code calculated bearing from 1 to 2.
+    // distance_diff = d1 - d2.
+    // The branch depends on the sign of distance_diff.
 
-      // Rotate and translate to world coordinates
-      double rotated_x = x * std::cos(bearing_val * M_PI / 180.0) - y * std::sin(bearing_val * M_PI / 180.0);
-      double rotated_y = x * std::sin(bearing_val * M_PI / 180.0) + y * std::cos(bearing_val * M_PI / 180.0);
+    double x = a * std::cosh(t);
+    // If distance_diff > 0, d1 > d2, closer to sensor 2 (which is "forward" along baseline?).
+    // If we define "Forward" as 1->2.
+    // If d1 > d2, we are closer to 2. So x should be positive?
+    // Let's test sign.
+    if (distance_diff < 0)
+      x = -x;
 
-      // Convert to lat/lon (approximate for small areas)
-      double lat = center_lat + (rotated_y / 111320.0); // 1 degree latitude ≈ 111.32 km
-      double lon = center_lon + (rotated_x / (111320.0 * std::cos(center_lat * M_PI / 180.0)));
+    double y = b * std::sinh(t);
 
-      points.push_back({lat, lon});
-    }
+    // Rotate (x,y) from Baseline frame to North/East frame
+    // Baseline Bearing (theta) is angle from North (0) clockwise.
+    // x is along heading. y is Right? Or Left?
+    // Let's assume y is Right (90 deg).
+    // North = x * cos(theta) - y * sin(theta) -- wait, standard rotation:
+    // If theta=0 (North), x should contribute to North. P_n = x. P_e = y.
+    // If theta=90 (East), x contributes to East. P_n = -y, P_e = x.
+    double theta_rad = bearing_val * M_PI / 180.0;
+
+    // Standard rotation?
+    // North component: x * cos(theta) - y * sin(theta)
+    // East component:  x * sin(theta) + y * cos(theta)
+    // This matches:
+    // 0 deg: N=x, E=y (x is North, y is East/Right)
+    // 90 deg: N=-y, E=x (x is East, y is South/Right... wait)
+    // At 90 deg bearing (East), North should be 0. x*0 - y*1 = -y.
+    // If y is "Left" (-90), N = +y.
+    // Let's just use the coefficients directly.
+
+    double delta_north = x * std::cos(theta_rad) - y * std::sin(theta_rad);
+    double delta_east = x * std::sin(theta_rad) + y * std::cos(theta_rad);
+
+    // Convert meters to lat/lon degrees
+    // 1 deg lat ~= 111,320 m
+    // 1 deg lon ~= 111,320 * cos(lat) m
+    double deg_lat = delta_north / 111320.0;
+    double deg_lon = delta_east / (111320.0 * std::cos(center_lat * M_PI / 180.0));
+
+    points.push_back({center_lat + deg_lat, center_lon + deg_lon});
   }
 
   return points;

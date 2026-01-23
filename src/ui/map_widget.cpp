@@ -5,6 +5,7 @@
 // #include "core/rf_engine.hpp" // CPU engine
 #include "imgui_impl_opengl3.h"
 #include "renderer/gpu_rf_engine.hpp" // GPU Engine
+#include <random>
 #include <algorithm>
 #include <cmath>
 #include <format>
@@ -1224,9 +1225,10 @@ auto map_widget_t::render_hyperbolas(const std::vector<sensor_t> &sensors, ImDra
     }
 
     // Draw curve
-    // Use a distinct color for each pair or uniform?
-    // Let's use Cyan or a distinct TDOA color
-    draw_list->AddPolyline(screen_points.data(), screen_points.size(), IM_COL32(0, 255, 255, 200), false, 2.0f);
+    // Draw outline for better visibility against map
+    draw_list->AddPolyline(screen_points.data(), screen_points.size(), IM_COL32(0, 0, 0, 150), false, 5.0f);
+    // Draw center line (Cyan)
+    draw_list->AddPolyline(screen_points.data(), screen_points.size(), IM_COL32(0, 255, 255, 255), false, 2.5f);
   }
 }
 
@@ -1489,56 +1491,83 @@ auto map_widget_t::render_test_point(const std::vector<sensor_t> &sensors, ImDra
     // 1. Calculate ideal TDOAs
     auto ideal_tdoa = m_tdoa_solver->calculate_tdoa(sensors, m_test_point_lat, m_test_point_lon);
 
-    // 2. Solve (Verify Geometry)
-    // Use test point as initial guess to verify stability
-    // Or we could use a perturbed start.
-    tdoa_result_t result = m_tdoa_solver->solve_position(sensors, ideal_tdoa, m_test_point_lat, m_test_point_lon);
+    // 1b. Inject Synthetic Noise (Jitter)
+    // To visualize the "Estimated" point wandering, we add random timing error.
+    static std::mt19937 gen(12345); // Fixed seed for stability, or random_device
+    // Actually, we want it to 'jitter' every frame? Or static?
+    // If static, it won't move. If frame-based, it will jump wildly.
+    // User probably wants to see *a* sample. Let's let it jitter every frame for now, or slow it down.
+    // Fast jitter is good to see the "cloud" of probability.
 
-    // 3. Update Error Estimate using current Jitter setting
-    // The solver calculates this, but let's be sure it uses the current jitter
-    double jitter = static_cast<double>(m_timing_jitter_ns);
-    result.error_estimate_m = m_tdoa_solver->estimate_positioning_error(sensors, m_test_point_lat, m_test_point_lon, jitter);
+    double jitter_ns = static_cast<double>(m_timing_jitter_ns);
+    std::normal_distribution<double> d(0.0, jitter_ns);
+
+    std::vector<double> noisy_tdoa = ideal_tdoa;
+    for (size_t i = 1; i < noisy_tdoa.size(); ++i)
+    {
+      noisy_tdoa[i] += d(gen);
+    }
+
+    // 2. Solve (Verify Geometry) with NOISY data
+    tdoa_result_t result = m_tdoa_solver->solve_position(sensors, noisy_tdoa, m_test_point_lat, m_test_point_lon);
+
+    // 3. Update Error Estimate
+    result.error_estimate_m = m_tdoa_solver->estimate_positioning_error(sensors, m_test_point_lat, m_test_point_lon, jitter_ns);
 
     // Store Result
     m_test_result = result;
   }
   else
   {
-    // Not enough data
     m_test_result = tdoa_result_t{};
   }
 
-  // --- Render Marker ---
+  // --- Render Markers ---
 
-  // Calculate screen position
-  double wx, wy;
-  geo::lat_lon_to_world(m_test_point_lat, m_test_point_lon, wx, wy);
+  auto latlon_to_screen = [&](double lat, double lon) -> ImVec2
+  {
+    double wx, wy;
+    geo::lat_lon_to_world(lat, lon, wx, wy);
 
-  double center_wx, center_wy;
-  geo::lat_lon_to_world(m_center_lat, m_center_lon, center_wx, center_wy);
+    double center_wx, center_wy;
+    geo::lat_lon_to_world(m_center_lat, m_center_lon, center_wx, center_wy);
 
-  if (wx - center_wx > 0.5)
-    wx -= 1.0;
-  if (wx - center_wx < -0.5)
-    wx += 1.0;
+    if (wx - center_wx > 0.5)
+      wx -= 1.0;
+    if (wx - center_wx < -0.5)
+      wx += 1.0;
 
-  // Utilize passed canvas metrics
-  ImVec2 screen_center = ImVec2(canvas_p0.x + canvas_sz.x * 0.5f, canvas_p0.y + canvas_sz.y * 0.5f);
+    ImVec2 screen_center = ImVec2(canvas_p0.x + canvas_sz.x * 0.5f, canvas_p0.y + canvas_sz.y * 0.5f);
+    double tile_size = 256.0;
+    double world_size_pixels = std::pow(2.0, m_zoom) * tile_size;
 
-  double tile_size = 256.0;
-  double world_size_pixels = std::pow(2.0, m_zoom) * tile_size;
+    float px = static_cast<float>((wx - center_wx) * world_size_pixels + screen_center.x);
+    float py = static_cast<float>((wy - center_wy) * world_size_pixels + screen_center.y);
+    return ImVec2(px, py);
+  };
 
-  float px = static_cast<float>((wx - center_wx) * world_size_pixels + screen_center.x);
-  float py = static_cast<float>((wy - center_wy) * world_size_pixels + screen_center.y);
+  ImVec2 p_truth = latlon_to_screen(m_test_point_lat, m_test_point_lon);
 
-  // Draw Target Marker (Crosshair)
+  // Draw Truth Marker (Red Crosshair)
   float size = 10.0f;
-  draw_list->AddLine(ImVec2(px - size, py), ImVec2(px + size, py), IM_COL32(255, 255, 255, 255), 2.0f);
-  draw_list->AddLine(ImVec2(px, py - size), ImVec2(px, py + size), IM_COL32(255, 255, 255, 255), 2.0f);
-  draw_list->AddCircle(ImVec2(px, py), size * 0.6f, IM_COL32(255, 0, 0, 255), 0, 2.0f);
+  draw_list->AddLine(ImVec2(p_truth.x - size, p_truth.y), ImVec2(p_truth.x + size, p_truth.y), IM_COL32(255, 255, 255, 200), 2.0f);
+  draw_list->AddLine(ImVec2(p_truth.x, p_truth.y - size), ImVec2(p_truth.x, p_truth.y + size), IM_COL32(255, 255, 255, 200), 2.0f);
+  draw_list->AddCircle(p_truth, size * 0.6f, IM_COL32(255, 0, 0, 255), 0, 2.0f);
+  draw_list->AddText(ImVec2(p_truth.x + size, p_truth.y - size), IM_COL32(255, 255, 255, 255), "Truth");
 
-  // Label?
-  // draw_list->AddText(ImVec2(px + size, py + size), IM_COL32(255, 255, 255, 255), "Test Pt");
+  // Draw Estimated Marker (Blue X) if valid
+  if (sensors.size() >= 3 && m_test_result.converged)
+  {
+    ImVec2 p_est = latlon_to_screen(m_test_result.latitude, m_test_result.longitude);
+
+    // Draw Error Vector (Yellow Dashed)
+    draw_list->AddLine(p_truth, p_est, IM_COL32(255, 255, 0, 180), 2.0f);
+
+    // Draw 'X'
+    draw_list->AddLine(ImVec2(p_est.x - size * 0.7f, p_est.y - size * 0.7f), ImVec2(p_est.x + size * 0.7f, p_est.y + size * 0.7f), IM_COL32(0, 100, 255, 255), 3.0f);
+    draw_list->AddLine(ImVec2(p_est.x + size * 0.7f, p_est.y - size * 0.7f), ImVec2(p_est.x - size * 0.7f, p_est.y + size * 0.7f), IM_COL32(0, 100, 255, 255), 3.0f);
+    draw_list->AddText(ImVec2(p_est.x + size, p_est.y - size), IM_COL32(100, 200, 255, 255), "Est");
+  }
 
 } // function
 
