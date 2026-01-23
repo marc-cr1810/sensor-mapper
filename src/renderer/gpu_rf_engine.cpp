@@ -248,43 +248,99 @@ void main() {
         float estimated_rx = tx_pwr + gain - quick_loss - pattern_loss - 10.0; // -10dB margin for terrain
         if (estimated_rx < u_min_signal_dbm - 20.0) continue; // Skip if way below threshold
 
-        // LOS Check (Adaptive Raymarch)
+        // LOS Check with Earth Curvature and Fresnel Diffraction
         float diffraction_loss = 0.0;
         
-        // Adaptive step count based on distance (fewer steps for close/far distances)
-        int steps = int(clamp(dist_m / 100.0, 5.0, 15.0));
+        // Accurate distance and steps
+        float dist_km = dist_m / 1000.0;
         
-        // Skip raymarching for very close distances (< 50m)
-        if (dist_m > 50.0) {
-            // Use larger steps for longer distances to reduce texture lookups
-            float step_increment = 1.0 / float(steps);
+        // Earth Radius radius (4/3 Effective)
+        float R_eff = 6378137.0 * 1.333333;
+        
+        // Raymarching for Obstruction
+        // Minimum steps for accuracy, but limit for performance
+        int steps = int(clamp(dist_m / 50.0, 20.0, 100.0));
+        float step_increment = 1.0 / float(steps);
+        
+        float max_v = -10.0;
+        
+        for(int s=1; s<steps; ++s) {
+            float t = float(s) * step_increment;
             
-            for(int s=1; s<steps; ++s) {
-                float t = float(s) * step_increment;
-                vec2 p_uv = s_uv + diff * t;
-                float p_h = texture(u_elevation_tex, p_uv).r;
-                float r_h = h_tx + t * (h_rx - h_tx);
-                
-                // Check for obstruction with small clearance buffer
-                if (p_h > r_h + 5.0) {
-                    diffraction_loss = 30.0;
-                    break;  // Early termination - no need to check further
-                }
+            // Texture lookup for terrain height
+            vec2 p_uv = s_uv + diff * t;
+            float p_h = texture(u_elevation_tex, p_uv).r;
+            
+            // Distances
+            float d1 = dist_m * t;
+            float d2 = dist_m * (1.0 - t);
+            
+            // Linear Line of Sight Height (Straight line between TX and RX)
+            float h_los = h_tx + t * (h_rx - h_tx);
+            
+            // Earth Curvature "Bulge" at this point (relative to straight chord)
+            // h = (d1 * d2) / (2 * R_eff)
+            float bulge = (d1 * d2) / (2.0 * R_eff);
+            
+            // Effective Obstacle Height
+            float h_obs = p_h + bulge;
+            
+            // Clearance (Ray - Obstacle)
+            float clearance = h_los - h_obs;
+            
+            // Fresnel Parameter v
+            // lambda = c / f
+            float lambda = 299.79 / freq;
+            float v = -clearance * sqrt( (2.0 * (d1+d2)) / (lambda * d1 * d2) );
+            
+            if (v > max_v) {
+                max_v = v;
             }
+        }
+        
+        // Calculate Knife-Edge Loss from max_v
+        // J(v) = 6.9 + 20 * log10(sqrt(v^2 + 1) + v)   for v > -0.7
+        if (max_v > -0.7) {
+            diffraction_loss = 6.9 + 20.0 * log(sqrt(max_v*max_v + 1.0) + max_v) / log(10.0);
         }
 
         // Use the path loss we already calculated
         float rx = tx_pwr + gain - quick_loss - pattern_loss - diffraction_loss;
         max_dbm = max(max_dbm, rx);
     }
-
-    // Coloring
+    
+    // Visualization
     vec4 col = vec4(0.0);
     if (max_dbm > u_min_signal_dbm) {
-        if (max_dbm >= -60.0) col = vec4(0.0, 1.0, 0.0, 0.8);
-        else if (max_dbm >= -80.0) col = mix(vec4(1.0, 1.0, 0.0, 0.7), vec4(0.0, 1.0, 0.0, 0.8), (max_dbm+80.0)/20.0);
-        else if (max_dbm >= -100.0) col = mix(vec4(1.0, 0.0, 0.0, 0.5), vec4(1.0, 1.0, 0.0, 0.7), (max_dbm+100.0)/20.0);
-        else col = vec4(1.0, 0.0, 0.0, max(0.0, (max_dbm+120.0)/20.0)*0.5);
+        // Simple heatmap gradient
+        float val = (max_dbm - u_min_signal_dbm) / 100.0; // Dynamic range ~100dB
+        val = clamp(val, 0.0, 1.0);
+        
+        // Turbo-like colormap approximation
+        // R
+        float r = 0.0;
+        if (val > 0.5) r = (val - 0.5) * 2.0;
+        if (val > 0.8) r = 0.6 + (val - 0.8) * 2.0; // Push to yellow/white
+        
+        // G
+        float g = 0.0;
+        if (val < 0.5) g = val * 2.0;
+        else g = 1.0 - (val - 0.5);
+        
+        // B
+        float b = 0.0;
+        if (val < 0.3) b = 1.0 - val * 3.33;
+        
+        // Alpha based on signal strength
+        float a = 0.4 + val * 0.6;
+        
+        col = vec4(r, g, b, a);
+        
+        // Hard threshold colors (optional, replacing with smooth gradient above)
+         if (max_dbm >= -60.0) col = vec4(0.0, 1.0, 0.0, 0.8);
+         else if (max_dbm >= -80.0) col = mix(vec4(1.0, 1.0, 0.0, 0.7), vec4(0.0, 1.0, 0.0, 0.8), (max_dbm+80.0)/20.0);
+         else if (max_dbm >= -100.0) col = mix(vec4(1.0, 0.0, 0.0, 0.5), vec4(1.0, 1.0, 0.0, 0.7), (max_dbm+100.0)/20.0);
+         else col = vec4(1.0, 0.0, 0.0, max(0.0, (max_dbm+120.0)/20.0)*0.5);
     }
     FragColor = col;
 }

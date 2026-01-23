@@ -109,45 +109,65 @@ auto rf_engine_t::compute_coverage(const std::vector<sensor_t> &sensors, elevati
                             double h_tx = sensor.get_mast_height() + sensor.get_ground_elevation();
                             double h_rx = 2.0 + cell_elevation_m;
 
-                            // Simple Terrain Occlusion (Line of Sight)
-                            double diffraction_loss = 0.0;
+                            // Single Knife-Edge Diffraction (Fresnel)
+                            double total_diffraction_loss = 0.0;
+
                             if (elevation_service)
                             {
-                              // Raymarch
-                              // Number of steps based on distance (e.g., every 50m)
-                              int steps = static_cast<int>(dist_m / 50.0);
-                              if (steps > 0)
+                              // Search for the "dominant" obstacle (highest Fresnel parameter v)
+                              double max_v = -10.0; // Start with a value indicating clear LoS
+                              bool any_obstruction = false;
+
+                              int steps = static_cast<int>(dist_m / 50.0); // 50m resolution
+                              if (steps < 10)
+                                steps = 10; // Minimum checks
+
+                              for (int i = 1; i < steps; ++i)
                               {
-                                for (int i = 1; i < steps; ++i)
+                                double t = (double)i / steps;
+                                double d1 = dist_m * t;
+                                double d2 = dist_m * (1.0 - t);
+
+                                // Point on the line (Great Circle approximated as line for lat/lon)
+                                double p_lat = sensor.get_latitude() + t * (cell_lat - sensor.get_latitude());
+                                double p_lon = sensor.get_longitude() + t * (cell_lon - sensor.get_longitude());
+
+                                float p_elev = 0.0f;
+                                elevation_service->get_elevation(p_lat, p_lon, p_elev);
+
+                                // Heights relative to sea level, ADJUSTED for Earth Curvature (4/3 R)
+                                // Effective height drops as we move away from both endpoints
+                                // But here we model the "bulge" of the earth between points
+                                // Or simpler: Flat earth with curved ray?
+                                // Standard approach: Curved Earth, Straight Ray.
+                                // h_obstacle_effective = h_terrain + h_curvature_bulge
+
+                                // Height of the straight line ray at this point
+                                double ray_h = h_tx + t * (h_rx - h_tx);
+
+                                // Earth curvature "bulge" at distance d1 from TX and d2 from RX
+                                // bulge = (d1 * d2) / (2 * k * R)
+                                double bulge = (d1 * d2) / (2.0 * geo::EARTH_K_FACTOR * geo::EARTH_RADIUS);
+
+                                // Effectively, the terrain is HIGHER by 'bulge' relative to the straight chord
+                                double obstacle_h = p_elev + bulge;
+
+                                // Clearance: Ray Height - Obstacle Height
+                                // If clearance is negative, ray is blocked.
+                                double clearance = ray_h - obstacle_h;
+
+                                // Calculate Fresnel Parameter v for this point
+                                // v is maximized when clearance is most negative (deepest obstruction)
+                                // or least positive (closest pass)
+                                double v = geo::fresnel_parameter(d1, d2, sensor.get_frequency_mhz(), -clearance);
+
+                                if (v > max_v)
                                 {
-                                  double t_step = (double)i / steps;
-                                  // Linear Interpolation of Lat/Lon (Approximation for short
-                                  // distances)
-                                  double p_lat = sensor.get_latitude() + t_step * (cell_lat - sensor.get_latitude());
-                                  double p_lon = sensor.get_longitude() + t_step * (cell_lon - sensor.get_longitude());
-
-                                  float p_h = 0.0f;
-                                  if (elevation_service->get_elevation(p_lat, p_lon, p_h))
-                                  {
-                                    // Interpolate Ray Height (Earth curvature ignored for short
-                                    // range, but added for >1km?) Simple flat earth ray:
-                                    double ray_h = h_tx + t_step * (h_rx - h_tx);
-
-                                    // Earth curvature drop: d^2 / (2*R) approx?
-                                    // Let's stick to simple line for now.
-
-                                    if (p_h > ray_h)
-                                    {
-                                      // Blocked!
-                                      // Variable loss based on depth?
-                                      diffraction_loss = 20.0 + (p_h - ray_h) * 0.5; // Soft diffraction
-                                      if (diffraction_loss > 100.0)
-                                        diffraction_loss = 100.0;
-                                      break; // Early exit on block
-                                    }
-                                  }
+                                  max_v = v;
                                 }
                               }
+
+                              total_diffraction_loss = geo::knife_edge_loss(max_v);
                             }
 
                             if (sensor.get_propagation_model() == PropagationModel::FreeSpace)
@@ -162,7 +182,7 @@ auto rf_engine_t::compute_coverage(const std::vector<sensor_t> &sensors, elevati
                               path_loss = calculate_hata(d_km, sensor.get_frequency_mhz(), sensor.get_mast_height(), 2.0, sensor.get_propagation_model());
                             }
 
-                            double rx = sensor.get_tx_power_dbm() + sensor.get_tx_antenna_gain_dbi() + sensor.get_rx_antenna_gain_dbi() - path_loss + pattern_gain - diffraction_loss;
+                            double rx = sensor.get_tx_power_dbm() + sensor.get_tx_antenna_gain_dbi() + sensor.get_rx_antenna_gain_dbi() - path_loss + pattern_gain - total_diffraction_loss;
 
                             if (rx > max_dbm)
                               max_dbm = rx;

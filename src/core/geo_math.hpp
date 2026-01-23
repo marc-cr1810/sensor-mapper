@@ -1,13 +1,12 @@
 #pragma once
 
 #include <cmath>
-#include <numbers>
 
 namespace sensor_mapper
 {
 namespace geo
 {
-constexpr double PI = std::numbers::pi;
+constexpr double PI = 3.14159265358979323846;
 constexpr double EARTH_RADIUS = 6378137.0;
 
 // Convert Latitude/Longitude to Web Mercator World Coordinate (0.0 to 1.0)
@@ -94,6 +93,46 @@ inline auto distance(double lat1, double lon1, double lat2, double lon2) -> doub
   double a = std::sin(delta_lat / 2.0) * std::sin(delta_lat / 2.0) + std::cos(lat1_rad) * std::cos(lat2_rad) * std::sin(delta_lon / 2.0) * std::sin(delta_lon / 2.0);
   double c = 2.0 * std::atan2(std::sqrt(a), std::sqrt(1.0 - a));
   return EARTH_RADIUS * c;
+}
+
+constexpr double EARTH_K_FACTOR = 1.333333; // Standard 4/3 Earth radius
+
+// Calculate effective height correction due to Earth curvature
+// d_m: Distance from transmitter in meters
+inline auto get_curvature_height_drop(double dist_m) -> double
+{
+  // h = d^2 / (2 * k * R)
+  return (dist_m * dist_m) / (2.0 * EARTH_K_FACTOR * EARTH_RADIUS);
+}
+
+// Calculate Fresnel Zone parameter (v)
+// d1: Distance TX to Obstacle (m)
+// d2: Distance Obstacle to RX (m)
+// freq_mhz: Frequency in MHz
+// h_clearance: Height of line-of-sight above obstacle (negative if blocked) (m)
+inline auto fresnel_parameter(double d1, double d2, double freq_mhz, double h_clearance) -> double
+{
+  // Wavelength lambda = c / f
+  double lambda = 299.792458 / freq_mhz;
+
+  // v = h * sqrt( (2 * (d1 + d2)) / (lambda * d1 * d2) )
+  if (d1 < 1.0 || d2 < 1.0)
+    return 0.0;
+
+  return h_clearance * std::sqrt((2.0 * (d1 + d2)) / (lambda * d1 * d2));
+}
+
+// Calculate Diffraction Loss (dB) using ITU-R P.526-15 approximation for single knife-edge
+// v: Fresnel-Kirchhoff diffraction parameter
+inline auto knife_edge_loss(double v) -> double
+{
+  if (v > -0.7)
+  {
+    // Loss exists
+    double v2 = v * v;
+    return 6.9 + 20.0 * std::log10(std::sqrt(v2 + 1.0) + v);
+  }
+  return 0.0; // No loss if clearance is sufficient
 }
 
 } // namespace geo
