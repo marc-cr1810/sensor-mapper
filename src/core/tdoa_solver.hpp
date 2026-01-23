@@ -27,10 +27,11 @@ struct tdoa_result_t
 {
   double latitude = 0.0;
   double longitude = 0.0;
-  double error_estimate_m = 0.0; // Estimated positioning error in meters
-  double gdop = 0.0;             // Geometric dilution of precision
-  bool converged = false;        // Whether solver converged
-  int iterations = 0;            // Number of solver iterations
+  double error_estimate_m = 0.0;               // Estimated positioning error in meters
+  double gdop = 0.0;                           // Geometric dilution of precision
+  std::vector<std::vector<double>> covariance; // 2x2 Covariance matrix for error ellipse
+  bool converged = false;                      // Whether solver converged
+  int iterations = 0;                          // Number of solver iterations
 };
 
 class tdoa_solver_t

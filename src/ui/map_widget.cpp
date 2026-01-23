@@ -1204,31 +1204,38 @@ auto map_widget_t::render_hyperbolas(const std::vector<sensor_t> &sensors, ImDra
     return ImVec2(px, py);
   };
 
-  // Draw hyperbola for each sensor pair (Sensor i vs Reference Sensor 0)
-  for (size_t i = 1; i < sensors.size(); ++i)
+  // Draw hyperbola for ALL unique sensor pairs to form a complete graph
+  // This is visually more intuitive than just the star topology (relative to sensor 0)
+  // although theoretically redundant.
+  for (size_t i = 0; i < sensors.size(); ++i)
   {
-    double tdoa_ns = test_tdoa[i]; // TDOA relative to sensor 0
-
-    // Sample hyperbola points
-    // We want enough samples to look smooth on screen
-    auto points = m_tdoa_solver->sample_hyperbola(ref_sensor, sensors[i], tdoa_ns, 200);
-
-    if (points.size() < 2)
-      continue;
-
-    std::vector<ImVec2> screen_points;
-    screen_points.reserve(points.size());
-
-    for (const auto &pt : points)
+    for (size_t j = i + 1; j < sensors.size(); ++j)
     {
-      screen_points.push_back(latlon_to_screen(pt.first, pt.second));
-    }
+      // Calculate TDOA for this pair: t(i) - t(j)
+      // We know t(k) relative to ref(0) is test_tdoa[k]
+      // So t(i) - t(j) = test_tdoa[i] - test_tdoa[j]
+      double tdoa_ns = test_tdoa[i] - test_tdoa[j];
 
-    // Draw curve
-    // Draw outline for better visibility against map
-    draw_list->AddPolyline(screen_points.data(), screen_points.size(), IM_COL32(0, 0, 0, 150), false, 5.0f);
-    // Draw center line (Cyan)
-    draw_list->AddPolyline(screen_points.data(), screen_points.size(), IM_COL32(0, 255, 255, 255), false, 2.5f);
+      // Sample hyperbola points
+      auto points = m_tdoa_solver->sample_hyperbola(sensors[i], sensors[j], tdoa_ns, 200);
+
+      if (points.size() < 2)
+        continue;
+
+      std::vector<ImVec2> screen_points;
+      screen_points.reserve(points.size());
+
+      for (const auto &pt : points)
+      {
+        screen_points.push_back(latlon_to_screen(pt.first, pt.second));
+      }
+
+      // Draw curve
+      // Outline
+      draw_list->AddPolyline(screen_points.data(), screen_points.size(), IM_COL32(0, 0, 0, 150), false, 5.0f);
+      // Center line (Cyan)
+      draw_list->AddPolyline(screen_points.data(), screen_points.size(), IM_COL32(0, 255, 255, 255), false, 2.5f);
+    }
   }
 }
 

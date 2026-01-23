@@ -55,6 +55,8 @@ auto tdoa_solver_t::solve_position(const std::vector<sensor_t> &sensors, const s
   const int max_iterations = 50;
   const double convergence_threshold = 1e-8; // radians
 
+  std::optional<std::vector<std::vector<double>>> final_cov;
+
   for (int iter = 0; iter < max_iterations; ++iter)
   {
     // Calculate current TDOA estimates
@@ -85,6 +87,8 @@ auto tdoa_solver_t::solve_position(const std::vector<sensor_t> &sensors, const s
       result.converged = false;
       return result;
     }
+
+    final_cov = JTJ_inv;
 
     // Calculate J^T * residuals
     std::vector<double> JT_residuals(2, 0.0);
@@ -123,6 +127,10 @@ auto tdoa_solver_t::solve_position(const std::vector<sensor_t> &sensors, const s
   result.longitude = lon;
   result.gdop = calculate_gdop(sensors, lat, lon);
   result.error_estimate_m = estimate_positioning_error(sensors, lat, lon);
+  if (final_cov.has_value())
+  {
+    result.covariance = *final_cov;
+  }
 
   return result;
 }
