@@ -1151,7 +1151,7 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors, int &selected_inde
     if (m_show_hyperbolas)
       render_hyperbolas(sensors, draw_list, canvas_p0, canvas_sz);
 
-    render_test_point(draw_list, canvas_p0, canvas_sz);
+    render_test_point(sensors, draw_list, canvas_p0, canvas_sz);
   }
 
   draw_list->PopClipRect();
@@ -1478,10 +1478,37 @@ auto map_widget_t::render_accuracy_heatmap(const std::vector<sensor_t> &sensors,
   }
 }
 
-auto map_widget_t::render_test_point(ImDrawList *draw_list, const ImVec2 &canvas_p0, const ImVec2 &canvas_sz) -> void
+auto map_widget_t::render_test_point(const std::vector<sensor_t> &sensors, ImDrawList *draw_list, const ImVec2 &canvas_p0, const ImVec2 &canvas_sz) -> void
 {
   if (!m_has_test_point)
     return;
+
+  // --- Calculate Test Point Data ---
+  if (sensors.size() >= 3 && m_tdoa_solver)
+  {
+    // 1. Calculate ideal TDOAs
+    auto ideal_tdoa = m_tdoa_solver->calculate_tdoa(sensors, m_test_point_lat, m_test_point_lon);
+
+    // 2. Solve (Verify Geometry)
+    // Use test point as initial guess to verify stability
+    // Or we could use a perturbed start.
+    tdoa_result_t result = m_tdoa_solver->solve_position(sensors, ideal_tdoa, m_test_point_lat, m_test_point_lon);
+
+    // 3. Update Error Estimate using current Jitter setting
+    // The solver calculates this, but let's be sure it uses the current jitter
+    double jitter = static_cast<double>(m_timing_jitter_ns);
+    result.error_estimate_m = m_tdoa_solver->estimate_positioning_error(sensors, m_test_point_lat, m_test_point_lon, jitter);
+
+    // Store Result
+    m_test_result = result;
+  }
+  else
+  {
+    // Not enough data
+    m_test_result = tdoa_result_t{};
+  }
+
+  // --- Render Marker ---
 
   // Calculate screen position
   double wx, wy;
