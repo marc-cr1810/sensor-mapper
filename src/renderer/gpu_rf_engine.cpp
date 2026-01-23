@@ -564,7 +564,6 @@ void gpu_rf_engine_t::update_antenna_pattern_texture(const std::vector<sensor_t>
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-    std::cout << "[DEBUG] Created antenna pattern texture" << std::endl;
   }
 
   // Build pattern data: 360 degrees x m_max_pattern_sensors
@@ -572,14 +571,11 @@ void gpu_rf_engine_t::update_antenna_pattern_texture(const std::vector<sensor_t>
   std::vector<float> pattern_data(360 * m_max_pattern_sensors, 0.0f);
 
   int num_sensors = std::min((int)sensors.size(), m_max_pattern_sensors);
-  std::cout << "[DEBUG] Uploading patterns for " << num_sensors << " sensors" << std::endl;
 
   for (int i = 0; i < num_sensors; ++i)
   {
     const auto &sensor = sensors[i];
     auto pattern = sensor.get_pattern();
-
-    std::cout << "[DEBUG] Sensor " << i << " has pattern: " << (pattern ? pattern->name : "NONE") << std::endl;
 
     // Sample antenna pattern at each degree
     float min_gain = 0.0f, max_gain = 0.0f;
@@ -592,15 +588,11 @@ void gpu_rf_engine_t::update_antenna_pattern_texture(const std::vector<sensor_t>
       if (angle == 0 || gain_db > max_gain)
         max_gain = gain_db;
     }
-
-    std::cout << "[DEBUG]   Gain range: " << min_gain << " to " << max_gain << " dB" << std::endl;
-    std::cout << "[DEBUG]   Sample gains: 0°=" << pattern_data[i * 360 + 0] << " 90°=" << pattern_data[i * 360 + 90] << " 180°=" << pattern_data[i * 360 + 180] << " 270°=" << pattern_data[i * 360 + 270] << std::endl;
   }
 
   // Upload to GPU
   glBindTexture(GL_TEXTURE_2D, m_antenna_pattern_texture);
   glTexImage2D(GL_TEXTURE_2D, 0, GL_R32F, 360, m_max_pattern_sensors, 0, GL_RED, GL_FLOAT, pattern_data.data());
-  std::cout << "[DEBUG] Uploaded pattern texture to GPU" << std::endl;
 }
 
 } // namespace sensor_mapper

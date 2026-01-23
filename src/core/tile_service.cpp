@@ -60,7 +60,7 @@ auto tile_service_t::get_tile(int z, int x, int y) -> std::shared_ptr<texture_t>
   }
 
   // Check disk cache
-  fs::path cache_dir = "cache/tiles";
+  fs::path cache_dir = ".cache/tiles";
   if (m_source == tile_source_t::OSM)
     cache_dir /= "osm";
   else if (m_source == tile_source_t::TERRARIUM)

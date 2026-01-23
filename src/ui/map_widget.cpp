@@ -442,6 +442,51 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors, int &selected_inde
           roof_points.push_back(ImVec2(p.x, p.y - height_px));
         }
 
+        // Culling & LOD Logic
+        // Calculate screen-space bounding box
+        float min_x = screen_points[0].x, max_x = screen_points[0].x;
+        float min_y = screen_points[0].y, max_y = screen_points[0].y;
+        for (const auto &p : screen_points)
+        {
+          min_x = std::min(min_x, p.x);
+          max_x = std::max(max_x, p.x);
+          min_y = std::min(min_y, p.y);
+          max_y = std::max(max_y, p.y);
+        }
+
+        // Add roof height to bbox
+        if (!roof_points.empty())
+        {
+          for (const auto &p : roof_points)
+          {
+            min_y = std::min(min_y, p.y); // Roof is above (lower Y)
+          }
+        }
+
+        float width = max_x - min_x;
+        float height = max_y - min_y;
+
+        // Skip if completely off-screen (with margin)
+        if (max_x < canvas_p0.x || min_x > canvas_p0.x + canvas_sz.x || max_y < canvas_p0.y || min_y > canvas_p0.y + canvas_sz.y)
+        {
+          continue;
+        }
+
+        // LOD: Skip tiny buildings
+        if (width < 3.0f || height < 3.0f)
+        {
+          // Too small to matter
+          continue;
+        }
+
+        // LOD: Simplified drawing for small buildings
+        if (width < 10.0f)
+        {
+          // Draw simple rect
+          draw_list->AddRectFilled(ImVec2(min_x, min_y), ImVec2(max_x, max_y), IM_COL32(100, 100, 100, 150));
+          continue;
+        }
+
         // Draw Roof
         draw_list->AddConvexPolyFilled(roof_points.data(), roof_points.size(), IM_COL32(140, 140, 140, 200));
         draw_list->AddPolyline(roof_points.data(), roof_points.size(), IM_COL32(220, 220, 220, 255), true, 1.0f);
@@ -544,9 +589,9 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors, int &selected_inde
 
       // Check if view or sensors changed significantly
       // Increased threshold to 0.01 degrees (~1.1 km) to reduce re-renders during pan/zoom
-      // Also added 20% margin to render area for smoother panning
-      double lat_margin = (max_lat - min_lat) * 0.2;
-      double lon_margin = (max_lon - min_lon) * 0.2;
+      // Also added 100% margin to render area for smoother panning
+      double lat_margin = (max_lat - min_lat) * 1.0;
+      double lon_margin = (max_lon - min_lon) * 1.0;
       double render_min_lat = min_lat - lat_margin;
       double render_max_lat = max_lat + lat_margin;
       double render_min_lon = min_lon - lon_margin;
@@ -560,6 +605,11 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors, int &selected_inde
 
       if (should_render)
       {
+        if (m_building_service)
+        {
+          m_building_service->fetch_buildings(render_min_lat, render_max_lat, render_min_lon, render_max_lon);
+        }
+
         m_heatmap_texture_id = m_rf_engine->render(sensors, &elevation_service, m_building_service.get(), render_min_lat, render_max_lat, render_min_lon, render_max_lon, m_min_signal_dbm);
         m_heatmap_dirty = false;
         last_render_time = current_time;
@@ -588,6 +638,8 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors, int &selected_inde
         float v_max = (float)((min_lat - cached_render_max_lat) / (cached_render_min_lat - cached_render_max_lat));
 
         // Clamp UV coordinates to valid range
+        // Since we use GL_CLAMP_TO_EDGE, falling outside 0-1 will repeat edge pixels (stretching).
+        // With the 100% margin above, this should rarely happen unless panning is extremely fast.
         u_min = std::max(0.0f, std::min(1.0f, u_min));
         u_max = std::max(0.0f, std::min(1.0f, u_max));
         v_min = std::max(0.0f, std::min(1.0f, v_min));

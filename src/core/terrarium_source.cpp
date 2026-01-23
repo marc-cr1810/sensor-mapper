@@ -85,7 +85,7 @@ auto terrarium_source_t::get_elevation(double lat, double lon, float &out_height
   {
     // Check disk cache first
     auto key = make_key(ELEVATION_ZOOM, tx, ty);
-    fs::path cache_file = fs::path("cache/elevation") / std::format("{}_{}_{}.png", ELEVATION_ZOOM, tx, ty);
+    fs::path cache_file = fs::path(".cache/elevation") / std::format("{}_{}_{}.png", ELEVATION_ZOOM, tx, ty);
 
     if (fs::exists(cache_file))
     {
@@ -140,7 +140,7 @@ auto terrarium_source_t::fetch_tile(int z, int x, int y) -> void
   // https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png
   std::string url = std::format("https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{}/{}/{}.png", z, x, y);
 
-  fs::path cache_file = fs::path("cache/elevation") / std::format("{}_{}_{}.png", z, x, y);
+  fs::path cache_file = fs::path(".cache/elevation") / std::format("{}_{}_{}.png", z, x, y);
   std::string save_path = cache_file.string();
 
   m_pending.push_back({z, x, y,
