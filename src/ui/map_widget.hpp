@@ -12,6 +12,7 @@
 #include <map>
 #include <memory>
 #include <vector>
+#include <optional>
 
 namespace sensor_mapper
 {
@@ -23,7 +24,7 @@ public:
   ~map_widget_t();
 
   auto update() -> void;
-  auto draw(const std::vector<sensor_t> &sensors, int &selected_index, elevation_service_t &elevation_service, std::function<void(double, double)> on_add_sensor) -> void;
+  auto draw(std::vector<sensor_t> &sensors, int &selected_index, elevation_service_t &elevation_service, std::function<void(double, double)> on_add_sensor) -> void;
 
   auto get_building_at_location(double lat, double lon) const -> double; // Returns height or 0
   auto fetch_buildings_near(double lat, double lon) -> void;
@@ -298,6 +299,10 @@ private:
   // Context Menu State
   double m_ctx_lat = 0.0;
   double m_ctx_lon = 0.0;
+
+  // Interaction State
+  int m_dragging_sensor_index = -1;
+  std::optional<geo_point_t> m_profile_hover_pos;
 };
 
 } // namespace sensor_mapper

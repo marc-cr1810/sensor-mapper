@@ -108,7 +108,7 @@ auto map_widget_t::fetch_buildings_near(double lat, double lon) -> void
   m_building_service->fetch_buildings(lat - delta, lat + delta, lon - delta, lon + delta);
 }
 
-auto map_widget_t::draw(const std::vector<sensor_t> &sensors, int &selected_index, elevation_service_t &elevation_service, std::function<void(double, double)> on_add_sensor) -> void
+auto map_widget_t::draw(std::vector<sensor_t> &sensors, int &selected_index, elevation_service_t &elevation_service, std::function<void(double, double)> on_add_sensor) -> void
 {
   // Update async tasks
   update();
@@ -151,6 +151,68 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors, int &selected_inde
   const double tile_size = 256.0;
   double n = std::pow(2.0, m_zoom);
   double world_size_pixels = n * tile_size;
+
+  // Screen center
+  ImVec2 screen_center = ImVec2(canvas_p0.x + canvas_sz.x * 0.5f, canvas_p0.y + canvas_sz.y * 0.5f);
+
+  // --- Calculate Mouse Lat/Lon Early ---
+  ImVec2 mouse_pos_screen_current = ImGui::GetMousePos();
+  // Check if mouse is inside canvas (approx)
+  if (ImGui::IsWindowHovered() || m_dragging_sensor_index != -1) // Allow dragging outside slightly?
+  {
+    double mouse_offset_x = mouse_pos_screen_current.x - screen_center.x;
+    double mouse_offset_y = mouse_pos_screen_current.y - screen_center.y;
+    double mouse_wx = center_wx + (mouse_offset_x / world_size_pixels);
+    double mouse_wy = center_wy + (mouse_offset_y / world_size_pixels);
+
+    // Wrap X
+    if (mouse_wx < 0.0)
+      mouse_wx = std::fmod(mouse_wx, 1.0) + 1.0;
+    if (mouse_wx > 1.0)
+      mouse_wx = std::fmod(mouse_wx, 1.0);
+
+    // Clamp Y
+    if (mouse_wy > 0.0 && mouse_wy < 1.0)
+    {
+      geo::world_to_lat_lon(mouse_wx, mouse_wy, m_mouse_lat, m_mouse_lon);
+    }
+  }
+
+  // --- Handle Sensor Dragging ---
+  if (m_dragging_sensor_index != -1)
+  {
+    if (ImGui::IsMouseDown(ImGuiMouseButton_Left))
+    {
+      if (m_dragging_sensor_index < static_cast<int>(sensors.size()))
+      {
+        // Update position
+        // Optional: Snap to grid or building could go here
+        // For now, smooth drag
+        // Constrain Lat/Lon?
+        auto &s = const_cast<sensor_t &>(sensors[m_dragging_sensor_index]); // Cast away const because draw() signature takes const sensors ref?
+        // Wait, draw() signature is: const std::vector<sensor_t> &sensors
+        // I CANNOT modify sensors in draw() if it is const!
+        // The signature in map_widget.hpp is:
+        // auto draw(const std::vector<sensor_t> &sensors, ...
+        // BUT the caller app_ui.cpp passes `sensors` which is non-const.
+        // I should verify if I can change the signature of draw() or if I need to use a callback.
+        // Callback approach is safer or change signature.
+        // Change signature is easiest: `std::vector<sensor_t> &sensors`.
+        // I will incorrectly cast it for now if I can't change signature easily in this tool call?
+        // No, I should change signature in hpp and cpp.
+        // BUT, `multi_replace` here is only for cpp.
+        // I'll cast away const for now as a pragmatic fix, noting I should update signature.
+        const_cast<sensor_t &>(s).set_latitude(m_mouse_lat);
+        const_cast<sensor_t &>(s).set_longitude(m_mouse_lon);
+
+        invalidate_rf_heatmap();
+      }
+    }
+    else
+    {
+      m_dragging_sensor_index = -1;
+    }
+  }
 
   // Right Click to Open Context Menu
   if (is_hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right))
@@ -225,7 +287,7 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors, int &selected_inde
   }
 
   // Panning
-  if (is_active && ImGui::IsMouseDragging(ImGuiMouseButton_Left))
+  if (is_active && ImGui::IsMouseDragging(ImGuiMouseButton_Left) && m_dragging_sensor_index == -1)
   {
     ImVec2 delta = io.MouseDelta;
 
@@ -254,8 +316,8 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors, int &selected_inde
   // Clip Rendering
   draw_list->PushClipRect(canvas_p0, ImVec2(canvas_p0.x + canvas_sz.x, canvas_p0.y + canvas_sz.y), true);
 
-  // Screen center
-  ImVec2 screen_center = ImVec2(canvas_p0.x + canvas_sz.x * 0.5f, canvas_p0.y + canvas_sz.y * 0.5f);
+  // Screen center (already calculated)
+  // ImVec2 screen_center = ImVec2(canvas_p0.x + canvas_sz.x * 0.5f, canvas_p0.y + canvas_sz.y * 0.5f);
 
   // Determine range of visible tiles
   int tile_zoom = static_cast<int>(std::floor(m_zoom));
@@ -728,13 +790,17 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors, int &selected_inde
       }
 
       // Hit Test
-      if (is_hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+      if (is_hovered)
       {
         float dx = io.MousePos.x - cx;
         float dy = io.MousePos.y - cy;
         if (dx * dx + dy * dy < 100.0f)
         {
-          selected_index = static_cast<int>(idx);
+          if (ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+          {
+            selected_index = static_cast<int>(idx);
+            m_dragging_sensor_index = static_cast<int>(idx);
+          }
         }
       }
     }
@@ -1275,13 +1341,17 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors, int &selected_inde
       }
 
       // Hit Test for Selection
-      if (is_hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+      if (is_hovered)
       {
         float dx = io.MousePos.x - cx_marker;
         float dy = io.MousePos.y - cy_marker;
         if (dx * dx + dy * dy < 100.0f)
         {
-          selected_index = static_cast<int>(idx);
+          if (ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+          {
+            selected_index = static_cast<int>(idx);
+            m_dragging_sensor_index = static_cast<int>(idx);
+          }
         }
       }
     }
@@ -1321,28 +1391,7 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors, int &selected_inde
     ImGui::EndPopup();
   }
 
-  // Calculate mouse Lat/Lon
-  ImVec2 mouse_pos = ImGui::GetMousePos();
-  // Check if mouse is inside canvas
-  if (ImGui::IsWindowHovered())
-  {
-    double mouse_offset_x = mouse_pos.x - screen_center.x;
-    double mouse_offset_y = mouse_pos.y - screen_center.y;
-    double mouse_wx = center_wx + (mouse_offset_x / world_size_pixels);
-    double mouse_wy = center_wy + (mouse_offset_y / world_size_pixels);
-
-    // Wrap X
-    if (mouse_wx < 0.0)
-      mouse_wx = std::fmod(mouse_wx, 1.0) + 1.0;
-    if (mouse_wx > 1.0)
-      mouse_wx = std::fmod(mouse_wx, 1.0);
-
-    // Clamp Y
-    if (mouse_wy > 0.0 && mouse_wy < 1.0)
-    {
-      geo::world_to_lat_lon(mouse_wx, mouse_wy, m_mouse_lat, m_mouse_lon);
-    }
-  }
+  // Previous Mouse Calc Location (Removed, now done early)
 
   // Draw overlay info
   std::string info_text = std::format("Cursor: {:.5f}, {:.5f}", m_mouse_lat, m_mouse_lon);
@@ -1397,66 +1446,87 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors, int &selected_inde
       render_hyperbolas(sensors, draw_list, canvas_p0, canvas_sz);
 
     render_test_point(sensors, draw_list, canvas_p0, canvas_sz);
+  }
 
-    if (m_has_profile_a)
-    {
-      double wx, wy;
-      geo::lat_lon_to_world(m_profile_a.lat, m_profile_a.lon, wx, wy);
-      if (wx - center_wx > 0.5)
-        wx -= 1.0;
-      if (wx - center_wx < -0.5)
-        wx += 1.0;
-      float px = static_cast<float>((wx - center_wx) * world_size_pixels + screen_center.x);
-      float py = static_cast<float>((wy - center_wy) * world_size_pixels + screen_center.y);
+  // Draw Profile Markers (Map Space)
+  if (m_has_profile_a)
+  {
+    double wx, wy;
+    geo::lat_lon_to_world(m_profile_a.lat, m_profile_a.lon, wx, wy);
+    if (wx - center_wx > 0.5)
+      wx -= 1.0;
+    if (wx - center_wx < -0.5)
+      wx += 1.0;
+    float px = static_cast<float>((wx - center_wx) * world_size_pixels + screen_center.x);
+    float py = static_cast<float>((wy - center_wy) * world_size_pixels + screen_center.y);
 
-      ImVec2 pA = ImVec2(px, py);
+    ImVec2 pA = ImVec2(px, py);
 
-      draw_list->AddCircleFilled(ImVec2(px, py), 6.0f, IM_COL32(255, 0, 255, 255));
-      draw_list->AddText(ImVec2(px + 8, py - 8), IM_COL32(255, 0, 255, 255), "A");
-    }
-    if (m_has_profile_b)
-    {
-      double wx, wy;
-      geo::lat_lon_to_world(m_profile_b.lat, m_profile_b.lon, wx, wy);
-      if (wx - center_wx > 0.5)
-        wx -= 1.0;
-      if (wx - center_wx < -0.5)
-        wx += 1.0;
-      float px = static_cast<float>((wx - center_wx) * world_size_pixels + screen_center.x);
-      float py = static_cast<float>((wy - center_wy) * world_size_pixels + screen_center.y);
+    draw_list->AddCircleFilled(ImVec2(px, py), 6.0f, IM_COL32(255, 0, 255, 255));
+    draw_list->AddText(ImVec2(px + 8, py - 8), IM_COL32(255, 0, 255, 255), "A");
+  }
+  if (m_has_profile_b)
+  {
+    double wx, wy;
+    geo::lat_lon_to_world(m_profile_b.lat, m_profile_b.lon, wx, wy);
+    if (wx - center_wx > 0.5)
+      wx -= 1.0;
+    if (wx - center_wx < -0.5)
+      wx += 1.0;
+    float px = static_cast<float>((wx - center_wx) * world_size_pixels + screen_center.x);
+    float py = static_cast<float>((wy - center_wy) * world_size_pixels + screen_center.y);
 
-      draw_list->AddCircleFilled(ImVec2(px, py), 6.0f, IM_COL32(255, 0, 255, 255));
-      draw_list->AddText(ImVec2(px + 8, py - 8), IM_COL32(255, 0, 255, 255), "B");
-    }
-    if (m_has_profile_a && m_has_profile_b)
-    {
-      // Draw line
-      double wx1, wy1, wx2, wy2;
-      geo::lat_lon_to_world(m_profile_a.lat, m_profile_a.lon, wx1, wy1);
-      geo::lat_lon_to_world(m_profile_b.lat, m_profile_b.lon, wx2, wy2);
+    draw_list->AddCircleFilled(ImVec2(px, py), 6.0f, IM_COL32(255, 0, 255, 255));
+    draw_list->AddText(ImVec2(px + 8, py - 8), IM_COL32(255, 0, 255, 255), "B");
+  }
+  if (m_has_profile_a && m_has_profile_b)
+  {
+    // Draw line
+    double wx1, wy1, wx2, wy2;
+    geo::lat_lon_to_world(m_profile_a.lat, m_profile_a.lon, wx1, wy1);
+    geo::lat_lon_to_world(m_profile_b.lat, m_profile_b.lon, wx2, wy2);
 
-      // Need to handle wrapping for line? simplified for now
-      if (wx1 - center_wx > 0.5)
-        wx1 -= 1.0;
-      if (wx1 - center_wx < -0.5)
-        wx1 += 1.0;
-      if (wx2 - center_wx > 0.5)
-        wx2 -= 1.0;
-      if (wx2 - center_wx < -0.5)
-        wx2 += 1.0;
+    // Need to handle wrapping for line? simplified for now
+    if (wx1 - center_wx > 0.5)
+      wx1 -= 1.0;
+    if (wx1 - center_wx < -0.5)
+      wx1 += 1.0;
+    if (wx2 - center_wx > 0.5)
+      wx2 -= 1.0;
+    if (wx2 - center_wx < -0.5)
+      wx2 += 1.0;
 
-      float px1 = static_cast<float>((wx1 - center_wx) * world_size_pixels + screen_center.x);
-      float py1 = static_cast<float>((wy1 - center_wy) * world_size_pixels + screen_center.y);
-      float px2 = static_cast<float>((wx2 - center_wx) * world_size_pixels + screen_center.x);
-      float py2 = static_cast<float>((wy2 - center_wy) * world_size_pixels + screen_center.y);
+    float px1 = static_cast<float>((wx1 - center_wx) * world_size_pixels + screen_center.x);
+    float py1 = static_cast<float>((wy1 - center_wy) * world_size_pixels + screen_center.y);
+    float px2 = static_cast<float>((wx2 - center_wx) * world_size_pixels + screen_center.x);
+    float py2 = static_cast<float>((wy2 - center_wy) * world_size_pixels + screen_center.y);
 
-      draw_list->AddLine(ImVec2(px1, py1), ImVec2(px2, py2), IM_COL32(255, 0, 255, 150), 2.0f);
-    }
+    draw_list->AddLine(ImVec2(px1, py1), ImVec2(px2, py2), IM_COL32(255, 0, 255, 150), 2.0f);
+  }
 
-    draw_list->PopClipRect();
+  draw_list->PopClipRect();
 
-    // Draw Profile Window
-    draw_path_profile_window(elevation_service);
+  // Draw Profile Window (ImGui Window)
+  draw_path_profile_window(elevation_service);
+
+  // Draw Profile Hover Marker (if active)
+  if (m_profile_hover_pos && m_show_profile_window)
+  {
+    double wx, wy;
+    geo::lat_lon_to_world(m_profile_hover_pos->lat, m_profile_hover_pos->lon, wx, wy);
+    // Wrap
+    if (wx - center_wx > 0.5)
+      wx -= 1.0;
+    if (wx - center_wx < -0.5)
+      wx += 1.0;
+
+    float px = static_cast<float>((wx - center_wx) * world_size_pixels + screen_center.x);
+    float py = static_cast<float>((wy - center_wy) * world_size_pixels + screen_center.y);
+
+    // Draw Crosshair
+    draw_list->AddCircleFilled(ImVec2(px, py), 4.0f, IM_COL32(255, 255, 0, 255));
+    draw_list->AddLine(ImVec2(px - 10, py), ImVec2(px + 10, py), IM_COL32(255, 255, 0, 200), 2.0f);
+    draw_list->AddLine(ImVec2(px, py - 10), ImVec2(px, py + 10), IM_COL32(255, 255, 0, 200), 2.0f);
   }
 }
 
@@ -2041,6 +2111,11 @@ auto map_widget_t::draw_path_profile_window(elevation_service_t &elevation_servi
     draw_list->AddRectFilled(canvas_p0, ImVec2(canvas_p0.x + canvas_sz.x, canvas_p0.y + canvas_sz.y), IM_COL32(50, 50, 50, 255));
 
     ImGui::InvisibleButton("graph_canvas", canvas_sz);
+    bool is_hovered_graph = ImGui::IsItemHovered();
+    ImVec2 mouse_pos_graph = ImGui::GetMousePos();
+
+    // Reset hover pos
+    m_profile_hover_pos.reset();
 
     // Find min/max height
     float min_h = profile[0].second;
@@ -2114,6 +2189,42 @@ auto map_widget_t::draw_path_profile_window(elevation_service_t &elevation_servi
     ImVec2 los_p1 = world_to_screen(0.0, start_h_eff);
     ImVec2 los_p2 = world_to_screen(dist_m, end_h_eff);
     draw_list->AddLine(los_p1, los_p2, IM_COL32(255, 255, 0, 255), 2.0f);
+
+    // Hover Logic
+    if (is_hovered_graph)
+    {
+      float mx = mouse_pos_graph.x - canvas_p0.x;
+      // Convert mx back to distance
+      double d_hover = (static_cast<double>(mx) / canvas_sz.x) * dist_m;
+      if (d_hover < 0)
+        d_hover = 0;
+      if (d_hover > dist_m)
+        d_hover = dist_m;
+
+      // Calculate interpolated position
+      double bearing_AB = geo::bearing(m_profile_a.lat, m_profile_a.lon, m_profile_b.lat, m_profile_b.lon);
+      double h_lat, h_lon;
+      geo::destination_point(m_profile_a.lat, m_profile_a.lon, d_hover, bearing_AB, h_lat, h_lon);
+
+      m_profile_hover_pos = {h_lat, h_lon};
+
+      // Draw Vertical Line on Graph
+      float screen_x = canvas_p0.x + mx;
+      draw_list->AddLine(ImVec2(screen_x, canvas_p0.y), ImVec2(screen_x, canvas_p0.y + canvas_sz.y), IM_COL32(255, 255, 255, 100), 1.0f);
+
+      // Find elevation at this point
+      float h_terrain = 0;
+      // Simple lookup in profile
+      if (samples > 1)
+      {
+        int idx = static_cast<int>((d_hover / dist_m) * (samples - 1));
+        if (idx >= 0 && idx < profile.size())
+          h_terrain = profile[idx].second;
+      }
+
+      // Tooltip
+      ImGui::SetTooltip("Dist: %.2f km\nElev: %.1f m", d_hover / 1000.0, h_terrain);
+    }
 
     // Fresnel Zone (1st)
     std::vector<ImVec2> fresnel_upper;
