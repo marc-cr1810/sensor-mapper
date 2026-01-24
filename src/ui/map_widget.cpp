@@ -1235,52 +1235,27 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors, int &selected_inde
   // GPU Readback
   if (m_show_heatmap_overlay && m_rf_engine)
   {
+    // GPU Readback
+    int w = m_rf_engine->get_width();
+    int h = m_rf_engine->get_height();
+
     // Calculate UV in the *rendered* texture
-    // Cache bounds are cached_render_min_lat, etc.
     float u = (float)((m_mouse_lon - cached_render_min_lon) / (cached_render_max_lon - cached_render_min_lon));
     float v = 1.0f - (float)((m_mouse_lat - cached_render_min_lat) / (cached_render_max_lat - cached_render_min_lat));
 
-    // Need pixel coords
-    // m_rf_engine likely has 512x512 resolution (or whatever was last used)
-    // Since we don't know the exact resolution stored in gpu_rf_engine private state,
-    // we rely on it handling the read? No, read_dbm_at takes x,y pixels.
-    // We need to know the resolution.
-    // We can guess or store it.
-    // Or we can add `read_dbm_at_uv(u, v)` to gpu_rf_engine?
-    // Too late to change interface easily.
-    // Assume 512 for now or read standard?
-    // Wait, gpu_rf_engine changes resolution adaptively (256, 384, 512, 768).
-    // We MUST know the resolution to map UV to XY.
-    // This is a flaw in my plan.
-    // FIX: pass normalized UV to `read_dbm_at`? Or `read_dbm_at` handles UV?
-    // No, I defined `read_dbm_at(int x, int y)`.
+    // Pixel coords (0,0 bottom-left)
+    int px = static_cast<int>(u * w);
+    int py = static_cast<int>(v * h);
 
-    // HACK: Just try 512? No, that's bad.
-    // Proper fix: Update `gpu_rf_engine` to return resolution or take UV.
-    // I'll skip GPU readback here to avoid breaking compilation with bad guesses,
-    // AND instead use the CPU logic I mentioned earlier?
-    // OR, since I'm editing `map_widget.cpp` and `gpu_rf_engine.cpp` is already done...
-    // I can't easily change `gpu_rf_engine`.
-
-    // Wait, `read_dbm_at` implementation in `gpu_rf_engine.cpp` maps (x,y) to pixel read.
-    // If I pass UV, I need resolution.
-
-    // Allow me to add `get_last_resolution()` to `gpu_rf_engine.hpp`?
-    // I can edit `gpu_rf_engine.hpp` quickly.
-    // Let's do that in a separate step if needed.
-    // For now, I'll put a placeholder: "Signal: ???"
-
-    // Actually, if I can't do it right, I'll omit it or do CPU interp if I have cache?
-    // No, let's try to assume 512 if not sure, or better:
-    // I will edit `gpu_rf_engine.hpp` to add `get_width()`/`get_height()`.
-    // I'll do that NEXT.
-    // For this block, I will write the code assuming `m_rf_engine->get_width()` exists.
-
-    // No, that will fail compile.
-    // I'll comment out the call for now.
-
-    // float dbm = m_rf_engine->read_dbm_at((int)(u * w), (int)(v * h));
-    // info_text += std::format(" | Signal: {:.1f} dBm", dbm);
+    // Clamp
+    if (px >= 0 && px < w && py >= 0 && py < h)
+    {
+      float dbm = m_rf_engine->read_dbm_at(px, py);
+      if (dbm > -150.0f)
+      {
+        info_text += std::format(" | Signal: {:.1f} dBm", dbm);
+      }
+    }
   }
 
   // Padding and positioning

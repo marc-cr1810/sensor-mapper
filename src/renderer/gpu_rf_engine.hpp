@@ -28,6 +28,15 @@ public:
   // Read back signal strength (dBm) at a specific pixel coordinate (0,0 is bottom-left)
   auto read_dbm_at(int x, int y) -> float;
 
+  auto get_width() const -> int
+  {
+    return m_fbo_width;
+  }
+  auto get_height() const -> int
+  {
+    return m_fbo_height;
+  }
+
 private:
   std::unique_ptr<shader_t> m_shader;
 
