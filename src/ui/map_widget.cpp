@@ -75,14 +75,20 @@ auto map_widget_t::set_map_source(int source_index) -> void
   {
     m_tile_service->set_source(tile_service_t::tile_source_t::OSM);
   }
-  else if (source_index == 1)
-  {
-    m_tile_service->set_source(tile_service_t::tile_source_t::TERRARIUM);
-  }
   else
   {
     m_tile_service->set_source(tile_service_t::tile_source_t::SATELLITE);
   }
+}
+
+auto map_widget_t::get_map_source() const -> int
+{
+  auto source = m_tile_service->get_source();
+  if (source == tile_service_t::tile_source_t::OSM)
+    return 0;
+  if (source == tile_service_t::tile_source_t::TERRARIUM)
+    return 1;
+  return 2;
 }
 
 auto map_widget_t::get_zoom() const -> double
@@ -190,21 +196,9 @@ auto map_widget_t::draw(std::vector<sensor_t> &sensors, std::set<int> &selected_
         // Optional: Snap to grid or building could go here
         // For now, smooth drag
         // Constrain Lat/Lon?
-        auto &s = const_cast<sensor_t &>(sensors[m_dragging_sensor_index]); // Cast away const because draw() signature takes const sensors ref?
-        // Wait, draw() signature is: const std::vector<sensor_t> &sensors
-        // I CANNOT modify sensors in draw() if it is const!
-        // The signature in map_widget.hpp is:
-        // auto draw(const std::vector<sensor_t> &sensors, ...
-        // BUT the caller app_ui.cpp passes `sensors` which is non-const.
-        // I should verify if I can change the signature of draw() or if I need to use a callback.
-        // Callback approach is safer or change signature.
-        // Change signature is easiest: `std::vector<sensor_t> &sensors`.
-        // I will incorrectly cast it for now if I can't change signature easily in this tool call?
-        // No, I should change signature in hpp and cpp.
-        // BUT, `multi_replace` here is only for cpp.
-        // I'll cast away const for now as a pragmatic fix, noting I should update signature.
-        const_cast<sensor_t &>(s).set_latitude(m_mouse_lat);
-        const_cast<sensor_t &>(s).set_longitude(m_mouse_lon);
+        auto &s = sensors[m_dragging_sensor_index];
+        s.set_latitude(m_mouse_lat);
+        s.set_longitude(m_mouse_lon);
 
         invalidate_rf_heatmap();
       }

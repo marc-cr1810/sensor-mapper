@@ -114,6 +114,8 @@ public:
     }
   }
 
+  auto get_map_source() const -> int;
+
   auto export_coverage_map(const std::string &path) -> bool;
 
   auto get_show_heatmap_overlay() const -> bool

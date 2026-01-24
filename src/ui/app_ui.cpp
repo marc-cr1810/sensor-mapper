@@ -111,9 +111,14 @@ void AppUI::render(map_widget_t &map, std::vector<sensor_t> &sensors, std::set<i
     ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
     if (ImGui::Begin("Map View", &m_show_map_view))
     {
+      ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(5, 5));
+      ImGui::BeginGroup();
       render_map_view_controls(map);
+      ImGui::EndGroup();
+      ImGui::PopStyleVar();
 
-      // Draw map
+      // No padding for map quad
+      ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
       map.draw(sensors, selected_indices, elevation_service,
                [&](double lat, double lon)
                {
@@ -129,6 +134,7 @@ void AppUI::render(map_widget_t &map, std::vector<sensor_t> &sensors, std::set<i
                  selected_indices.clear();
                  selected_indices.insert(static_cast<int>(sensors.size()) - 1);
                });
+      ImGui::PopStyleVar();
     }
     ImGui::End();
     ImGui::PopStyleVar();
@@ -727,84 +733,110 @@ void AppUI::render_tdoa_analysis(map_widget_t &map, const std::vector<sensor_t> 
 
 void AppUI::render_map_view_controls(map_widget_t &map)
 {
-  // Toolbar style
-  ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(5, 5));
+  ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(5, 4));
+  ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(8, 4));
 
-  // -- Toggles --
-  bool show_rf = map.get_show_rf_gradient();
-  if (ImGui::Checkbox("RF", &show_rf))
-    map.set_show_rf_gradient(show_rf);
-  if (ImGui::IsItemHovered())
-    ImGui::SetTooltip("Show RF signal strength gradient");
+  float window_width = ImGui::GetContentRegionAvail().x;
+  float current_x = 0;
 
-  ImGui::SameLine();
-  bool show_comp = map.get_show_composite();
-  if (ImGui::Checkbox("Comp", &show_comp))
-    map.set_show_composite(show_comp);
-  if (ImGui::IsItemHovered())
-    ImGui::SetTooltip("Show composite coverage");
-
-  ImGui::SameLine();
-  bool show_heat = map.get_show_heatmap_overlay();
-  if (ImGui::Checkbox("Heat", &show_heat))
-    map.set_show_heatmap_overlay(show_heat);
-  if (ImGui::IsItemHovered())
-    ImGui::SetTooltip("Show coverage heatmap");
-
-  ImGui::SameLine();
-  bool show_overlap = (map.get_viz_mode() == 1);
-  if (ImGui::Checkbox("Overlap", &show_overlap))
-    map.set_viz_mode(show_overlap ? 1 : 0);
-  if (ImGui::IsItemHovered())
-    ImGui::SetTooltip("Show sensor overlap count");
-
-  ImGui::SameLine();
-  bool show_bldg = map.get_show_buildings();
-  if (ImGui::Checkbox("Bldg", &show_bldg))
-    map.set_show_buildings(show_bldg);
-
-  ImGui::SameLine();
-  bool show_elev = map.get_show_elevation_sources();
-  if (ImGui::Checkbox("Src", &show_elev))
-    map.set_show_elevation_sources(show_elev);
-  if (ImGui::IsItemHovered())
-    ImGui::SetTooltip("Show elevation source bounds");
-
-  ImGui::SameLine();
-  bool show_rast = map.get_show_raster_visual();
-  if (ImGui::Checkbox("Rast", &show_rast))
-    map.set_show_raster_visual(show_rast);
-  if (ImGui::IsItemHovered())
-    ImGui::SetTooltip("Show elevation raster visual");
-
-  // -- Signal Slider --
-  ImGui::SameLine();
-  ImGui::SetNextItemWidth(100);
-  float min_signal = map.get_min_signal_dbm();
-  if (ImGui::SliderFloat("##minsignal", &min_signal, -120.0f, -50.0f, "%.0f dBm"))
+  auto wrap_group = [&](float group_width)
   {
-    map.set_min_signal_dbm(min_signal);
-  }
-  if (ImGui::IsItemHovered())
-    ImGui::SetTooltip("Min Signal Threshold");
+    if (current_x > 0 && current_x + group_width > window_width)
+    {
+      ImGui::NewLine();
+      current_x = 0;
+    }
+    else if (current_x > 0)
+    {
+      ImGui::SameLine();
+      current_x += ImGui::GetStyle().ItemSpacing.x;
+    }
+    ImGui::BeginGroup();
+  };
 
-  ImGui::SameLine();
-  if (ImGui::Button("Export"))
+  auto end_group = [&](float actual_width)
   {
-    if (map.export_coverage_map("coverage_export.ppm"))
-    {
-      // Maybe show a toast/notification? For now, console only
-      printf("Exported coverage to coverage_export.ppm\n");
-    }
-    else
-    {
-      printf("Failed to export coverage map\n");
-    }
-  }
-  if (ImGui::IsItemHovered())
-    ImGui::SetTooltip("Export current coverage view to PPM file");
+    ImGui::EndGroup();
+    current_x += actual_width;
+  };
 
-  ImGui::PopStyleVar();
+  // --- Group 1: RF Visualization Modes (Approx 280px) ---
+  wrap_group(280.0f);
+  {
+    bool show_rf = map.get_show_rf_gradient();
+    if (ImGui::Checkbox("RF", &show_rf))
+      map.set_show_rf_gradient(show_rf);
+
+    ImGui::SameLine();
+    bool show_comp = map.get_show_composite();
+    if (ImGui::Checkbox("Comp", &show_comp))
+      map.set_show_composite(show_comp);
+
+    ImGui::SameLine();
+    bool show_heat = map.get_show_heatmap_overlay();
+    if (ImGui::Checkbox("Heat", &show_heat))
+      map.set_show_heatmap_overlay(show_heat);
+
+    end_group(280.0f);
+  }
+
+  // --- Group 2: Special Modes (Approx 160px) ---
+  wrap_group(160.0f);
+  {
+    bool show_overlap = (map.get_viz_mode() == 1);
+    if (ImGui::Checkbox("Overlap", &show_overlap))
+      map.set_viz_mode(show_overlap ? 1 : 0);
+
+    ImGui::SameLine();
+    bool show_qual = (map.get_viz_mode() == 2);
+    if (ImGui::Checkbox("Qual", &show_qual))
+      map.set_viz_mode(show_qual ? 2 : 0);
+
+    end_group(160.0f);
+  }
+
+  // --- Group 3: Environment (Approx 140px) ---
+  wrap_group(140.0f);
+  {
+    bool show_bldg = map.get_show_buildings();
+    if (ImGui::Checkbox("Bldg", &show_bldg))
+      map.set_show_buildings(show_bldg);
+
+    ImGui::SameLine();
+    bool show_src = map.get_show_elevation_sources();
+    if (ImGui::Checkbox("Src", &show_src))
+      map.set_show_elevation_sources(show_src);
+
+    end_group(140.0f);
+  }
+
+  // --- Group 4: Config & Tools (Approx 300px) ---
+  wrap_group(300.0f);
+  {
+    ImGui::SetNextItemWidth(80);
+    float min_signal = map.get_min_signal_dbm();
+    if (ImGui::SliderFloat("##minsignal", &min_signal, -120.0f, -50.0f, "%.0f"))
+      map.set_min_signal_dbm(min_signal);
+    if (ImGui::IsItemHovered())
+      ImGui::SetTooltip("Threshold: %.0f dBm", min_signal);
+
+    ImGui::SameLine();
+    if (ImGui::Button("Export"))
+      map.export_coverage_map("coverage_export.ppm");
+
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(100);
+    int map_source = map.get_map_source();
+    const char *sources[] = {"Street", "Terrain", "Satellite"};
+    if (ImGui::Combo("##mapsource", &map_source, sources, IM_ARRAYSIZE(sources)))
+    {
+      map.set_map_source(map_source);
+    }
+
+    end_group(300.0f);
+  }
+
+  ImGui::PopStyleVar(2);
   ImGui::Separator();
 }
 

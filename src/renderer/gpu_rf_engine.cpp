@@ -404,31 +404,23 @@ void main() {
 
     float max_dbm = -200.0;
     int overlap_count = 0;
+    
+    // TDOA Quality: Vector Sum Accumulation
+    vec2 sum_dirs = vec2(0.0);
+    int tdoa_visible_count = 0;
 
     for(int i=0; i<MAX_SENSORS; ++i) {
         if (i >= u_sensor_count) break;
-        // In Overlap mode (1), we need to check ALL sensors, so disable early exit optimization
+        // Optimization: In Heatmap (0), we can exit early if we found a very strong signal.
+        // But for Overlap (1) and TDOA (2), we must check ALL sensors to count overlaps.
         if (u_viz_mode == 0 && max_dbm >= -10.0) break; 
 
         vec2 s_uv = u_sensor_pos_range[i].xy;
         float s_range = u_sensor_pos_range[i].z; 
 
-        // 1. Calculate Relative Difference in Degrees directly from UVs
-        // This avoids precision loss from adding/subtracting large absolute coordinates (e.g. 151.0)
-        
-        // Lon Diff: Straightforward linear mapping
         float d_lon_deg = (v_texcoord.x - s_uv.x) * lon_delta_deg;
-        
-        // Lat Diff: Account for the V-flip in texture generation
-        // Pixel Lat = Max - v_tex * Delta
-        // Sensor Lat = Max - s_uv * Delta
-        // Diff = Pixel - Sensor = (Max - v*D) - (Max - s*D) = (s - v) * D
-        // Wait: earlier I said s_lat = u_lat_range.y - s_uv.y * delta.
-        float d_lat_deg = (s_uv.y - v_texcoord.y) * lat_delta_deg;
+        float d_lat_deg = (s_uv.y - v_texcoord.y) * lat_delta_deg; 
 
-        // Calculate Meters
-        // Use average latitude between pixel and sensor for best accuracy
-        // s_lat_abs can be approximated or reconstructed
         float s_lat_abs = u_lat_range.y - s_uv.y * lat_delta_deg;
         float avg_lat_rad = radians((my_lat_abs + s_lat_abs) * 0.5);
         
@@ -438,8 +430,7 @@ void main() {
 
         if (dist_m > s_range) continue;
         
-        // Pass to diff_m for consistent variable usage if needed, but we have dist_m
-        vec2 diff_m = vec2(dist_x_m, dist_y_m); // Directional difference in meters
+        vec2 diff_m = vec2(dist_x_m, dist_y_m); 
 
         float tx_pwr = u_sensor_params_1[i].x;
         float freq   = u_sensor_params_1[i].y;
@@ -484,8 +475,6 @@ void main() {
         float step_increment = 1.0 / float(steps);
         float max_v = -10.0;
         
-        // Ray cast UV
-        // Direction from sensor to pixel in UV space
         vec2 diff_uv = v_texcoord - s_uv; 
 
         for(int s=1; s<steps; ++s) {
@@ -512,23 +501,23 @@ void main() {
         if (u_viz_mode == 0) {
             max_dbm = max(max_dbm, rx);
         } else {
-            // Overlap Mode: Check threshold
+            // Overlap & TDOA: Check threshold
             if (rx > u_min_signal_dbm) {
                 overlap_count++;
+                
+                // TDOA Accumulation
+                if (u_viz_mode == 2 && dist_m > 0.1) {
+                    sum_dirs += normalize(diff_m); // Accumulate unit vector TO this sensor (or from)
+                    // normalize(diff_m) is vector FROM sensor TO pixel?
+                    // dist_x_m = pixel - sensor. Yes.
+                    // If sensors surround pixel, sum of vectors (from sensor to pixel) should be near zero.
+                    tdoa_visible_count++;
+                }
             }
         }
     }
     
-    fragDataVal = max_dbm; // Always output max_dbm for data readback? Or overlap count?
-    // User might want to query signal strength even in overlap mode?
-    // But read_dbm_at expects float. Let's output max_dbm still if possible, or overlap count.
-    // If we are in overlap mode, max_dbm is -200.0 (uninitialized).
-    // Let's keep max_dbm logic valid? No, we skipped it.
-    // Let's just output thresholded count as "signal" for now in data channel if easy?
-    // Actually, data readback `read_dbm_at` is used for the cursor tooltip.
-    // Ideally we want signal strength tooltip even in overlap mode.
-    // But that would require calculating max_dbm AND overlap count.
-    // Optimization trade-off. Let's stick to what we calculated.
+    // Data output logic remains simple
     if (u_viz_mode == 1) {
         fragDataVal = float(overlap_count); 
     } else {
@@ -542,7 +531,6 @@ void main() {
     if (u_viz_mode == 0) {
         // Heatmap Mode
         if (max_dbm > u_min_signal_dbm) {
-            // Use fixed range for consistent colors
             float val = (max_dbm - COLOR_MIN_DBM) / (COLOR_MAX_DBM - COLOR_MIN_DBM);
             val = clamp(val, 0.0, 1.0);
             
@@ -553,8 +541,8 @@ void main() {
             
             col = vec4(r, g, b, a);
         }
-    } else {
-        // Overlap Mode
+    } else if (u_viz_mode == 1) {
+        // Overlap Mode (RESTORED)
         if (overlap_count > 0) {
             if (overlap_count >= 3) {
                 col = vec4(0.0, 1.0, 0.0, 0.6); // Green (Good for TDOA)
@@ -563,6 +551,33 @@ void main() {
             } else {
                 col = vec4(1.0, 0.0, 0.0, 0.6); // Red (Single detection)
             }
+        }
+    } else if (u_viz_mode == 2) {
+        // TDOA Confidence Mode
+        if (overlap_count >= 3 && tdoa_visible_count > 0) {
+            // Calculate Vector Sum Magnitude
+            // Normalize by count
+            float mean_len = length(sum_dirs) / float(tdoa_visible_count);
+            
+            // Quality Metric Q = 1.0 - mean_len
+            // mean_len=1.0 -> All stacked -> Q=0 (Bad)
+            // mean_len=0.0 -> Perfect symmetry -> Q=1 (Good)
+            float Q = 1.0 - mean_len;
+            Q = clamp(Q, 0.0, 1.0);
+            
+            // Map Q to Color (Red -> Yellow -> Green)
+            vec3 c_bad = vec3(1.0, 0.0, 0.0);
+            vec3 c_mid = vec3(1.0, 1.0, 0.0);
+            vec3 c_good = vec3(0.0, 1.0, 0.0);
+            
+            vec3 final_rgb;
+            if (Q < 0.5) {
+                final_rgb = mix(c_bad, c_mid, Q * 2.0);
+            } else {
+                final_rgb = mix(c_mid, c_good, (Q - 0.5) * 2.0);
+            }
+            
+            col = vec4(final_rgb, 0.6);
         }
     }
     FragColor = col;
