@@ -1,8 +1,10 @@
 #pragma once
 
 #include "core/elevation_source.hpp"
+#include "core/crs_transformer.hpp"
 #include <string>
 #include <vector>
+#include <memory>
 #include <filesystem>
 
 namespace sensor_mapper
@@ -41,12 +43,8 @@ private:
 
   bool m_loaded = false;
 
-#ifdef HAVE_PROJ
-  // PROJ transformation context
-  void *m_proj_ctx = nullptr;       // PJ_CONTEXT*
-  void *m_transformation = nullptr; // PJ* - transforms WGS84 -> file CRS
-  bool m_has_valid_crs = false;
-#endif
+  // CRS Transformer (handles PROJ or fallback)
+  std::unique_ptr<crs_transformer_t> m_transformer;
 };
 
 } // namespace sensor_mapper

@@ -137,6 +137,8 @@ set(SOURCES
   src/core/elevation_service.cpp
   src/core/elevation_service.hpp
   src/core/geo_math.hpp
+  src/core/crs_transformer.cpp
+  src/core/crs_transformer.hpp
   src/core/persistence.cpp
   src/core/persistence.hpp
   src/core/rf_engine.cpp
