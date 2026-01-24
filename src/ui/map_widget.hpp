@@ -1,15 +1,16 @@
 #pragma once
 
-#include "core/building_service.hpp"
-#include "core/elevation_service.hpp"
-#include "core/geo_math.hpp"
-#include "core/sensor.hpp"
-#include "core/tdoa_solver.hpp"
-#include "core/tile_service.hpp"
+#include "../core/building_service.hpp"
+#include "../core/elevation_service.hpp"
+#include "../renderer/gpu_rf_engine.hpp"
+#include "../core/sensor.hpp"
+#include "../core/tile_service.hpp"
+#include "../core/tdoa_solver.hpp"
 #include "imgui.h"
 #include <functional>
 #include <future>
 #include <map>
+#include <set>
 #include <memory>
 #include <vector>
 #include <optional>
@@ -24,7 +25,7 @@ public:
   ~map_widget_t();
 
   auto update() -> void;
-  auto draw(std::vector<sensor_t> &sensors, int &selected_index, elevation_service_t &elevation_service, std::function<void(double, double)> on_add_sensor) -> void;
+  auto draw(std::vector<sensor_t> &sensors, std::set<int> &selected_indices, elevation_service_t &elevation_service, std::function<void(double, double)> on_add_sensor) -> void;
 
   auto get_building_at_location(double lat, double lon) const -> double; // Returns height or 0
   auto fetch_buildings_near(double lat, double lon) -> void;
@@ -90,6 +91,21 @@ public:
   {
     m_show_raster_visual = show;
   }
+
+  auto get_viz_mode() const -> int
+  {
+    return m_viz_mode;
+  }
+  auto set_viz_mode(int mode) -> void
+  {
+    if (m_viz_mode != mode)
+    {
+      m_viz_mode = mode;
+      invalidate_rf_heatmap();
+    }
+  }
+
+  auto export_coverage_map(const std::string &path) -> bool;
 
   auto get_show_heatmap_overlay() const -> bool
   {
@@ -226,7 +242,8 @@ private:
   bool m_show_composite = false;
   bool m_show_buildings = false;
   bool m_show_elevation_sources = false;
-  bool m_show_raster_visual = true;
+  bool m_show_raster_visual = false;
+  int m_viz_mode = 0;                 // 0=Heatmap, 1=Overlap
   bool m_show_heatmap_overlay = true; // Show GPU-rendered coverage overlay
 
   float m_min_signal_dbm = -90.0f; // Minimum signal strength to display (dBm)

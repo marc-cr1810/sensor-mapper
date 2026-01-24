@@ -1,14 +1,15 @@
-#include "ui/map_widget.hpp"
-#include "core/building_service.hpp"
-#include "core/elevation_service.hpp"
-#include "core/geo_math.hpp"
-#include "core/sensor.hpp"
-#include "core/tdoa_solver.hpp"
-#include "core/tile_service.hpp"
+#include "map_widget.hpp"
+#include "image_exporter.hpp"
+#include "../core/building_service.hpp"
+#include "../core/elevation_service.hpp"
+#include "../core/geo_math.hpp"
+#include "../core/sensor.hpp"
+#include "../core/tdoa_solver.hpp"
+#include "../core/tile_service.hpp"
 #include "imgui.h"
 
 #include "imgui_impl_opengl3.h"
-#include "renderer/gpu_rf_engine.hpp" // GPU Engine
+#include "../renderer/gpu_rf_engine.hpp" // GPU Engine
 #include <random>
 
 #include <algorithm>
@@ -108,7 +109,7 @@ auto map_widget_t::fetch_buildings_near(double lat, double lon) -> void
   m_building_service->fetch_buildings(lat - delta, lat + delta, lon - delta, lon + delta);
 }
 
-auto map_widget_t::draw(std::vector<sensor_t> &sensors, int &selected_index, elevation_service_t &elevation_service, std::function<void(double, double)> on_add_sensor) -> void
+auto map_widget_t::draw(std::vector<sensor_t> &sensors, std::set<int> &selected_indices, elevation_service_t &elevation_service, std::function<void(double, double)> on_add_sensor) -> void
 {
   // Update async tasks
   update();
@@ -685,7 +686,7 @@ auto map_widget_t::draw(std::vector<sensor_t> &sensors, int &selected_index, ele
           m_building_service->fetch_buildings(render_min_lat, render_max_lat, render_min_lon, render_max_lon);
         }
 
-        auto result = m_rf_engine->render(sensors, &elevation_service, m_building_service.get(), render_min_lat, render_max_lat, render_min_lon, render_max_lon, m_min_signal_dbm);
+        auto result = m_rf_engine->render(sensors, &elevation_service, m_building_service.get(), render_min_lat, render_max_lat, render_min_lon, render_max_lon, m_min_signal_dbm, m_viz_mode);
         m_heatmap_texture_id = result.texture_id;
 
         // IMPORTANT: Only acknowledge "clean" state if result is ready/fresh.
@@ -766,7 +767,7 @@ auto map_widget_t::draw(std::vector<sensor_t> &sensors, int &selected_index, ele
     for (size_t idx = 0; idx < sensors.size(); ++idx)
     {
       const auto &sensor = sensors[idx];
-      bool is_selected = (static_cast<int>(idx) == selected_index);
+      bool is_selected = selected_indices.contains(static_cast<int>(idx));
 
       // Calculate center screen pos
       double s_lat = sensor.get_latitude();
@@ -798,7 +799,25 @@ auto map_widget_t::draw(std::vector<sensor_t> &sensors, int &selected_index, ele
         {
           if (ImGui::IsMouseClicked(ImGuiMouseButton_Left))
           {
-            selected_index = static_cast<int>(idx);
+            if (ImGui::GetIO().KeyCtrl)
+            {
+              if (is_selected)
+                selected_indices.erase(static_cast<int>(idx));
+              else
+                selected_indices.insert(static_cast<int>(idx));
+            }
+            else if (ImGui::GetIO().KeyShift)
+            {
+              selected_indices.insert(static_cast<int>(idx));
+            }
+            else
+            {
+              if (!is_selected)
+              {
+                selected_indices.clear();
+                selected_indices.insert(static_cast<int>(idx));
+              }
+            }
             m_dragging_sensor_index = static_cast<int>(idx);
           }
         }
@@ -947,7 +966,7 @@ auto map_widget_t::draw(std::vector<sensor_t> &sensors, int &selected_index, ele
     for (size_t idx = 0; idx < sensors.size(); ++idx)
     {
       const auto &sensor = sensors[idx];
-      bool is_selected = (static_cast<int>(idx) == selected_index);
+      bool is_selected = selected_indices.contains(static_cast<int>(idx));
       double s_lat = sensor.get_latitude();
       double s_lon = sensor.get_longitude();
       double range_m = sensor.get_range();
@@ -1349,7 +1368,25 @@ auto map_widget_t::draw(std::vector<sensor_t> &sensors, int &selected_index, ele
         {
           if (ImGui::IsMouseClicked(ImGuiMouseButton_Left))
           {
-            selected_index = static_cast<int>(idx);
+            if (ImGui::GetIO().KeyCtrl)
+            {
+              if (is_selected)
+                selected_indices.erase(static_cast<int>(idx));
+              else
+                selected_indices.insert(static_cast<int>(idx));
+            }
+            else if (ImGui::GetIO().KeyShift)
+            {
+              selected_indices.insert(static_cast<int>(idx));
+            }
+            else
+            {
+              if (!is_selected)
+              {
+                selected_indices.clear();
+                selected_indices.insert(static_cast<int>(idx));
+              }
+            }
             m_dragging_sensor_index = static_cast<int>(idx);
           }
         }
@@ -2256,6 +2293,14 @@ auto map_widget_t::draw_path_profile_window(elevation_service_t &elevation_servi
     }
   }
   ImGui::End();
+}
+
+auto map_widget_t::export_coverage_map(const std::string &path) -> bool
+{
+  if (m_heatmap_texture_id == 0 || !m_rf_engine)
+    return false;
+
+  return image_exporter_t::save_texture_to_png(m_heatmap_texture_id, m_rf_engine->get_width(), m_rf_engine->get_height(), path);
 }
 
 } // namespace sensor_mapper

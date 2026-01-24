@@ -86,12 +86,12 @@ void AppUI::setup_style()
   style.IndentSpacing = 20.0f;
 }
 
-void AppUI::render(map_widget_t &map, std::vector<sensor_t> &sensors, int &selected_sensor_index, elevation_service_t &elevation_service, antenna_pattern_ui_state_t &antenna_ui_state, std::function<void()> on_exit)
+void AppUI::render(map_widget_t &map, std::vector<sensor_t> &sensors, std::set<int> &selected_indices, elevation_service_t &elevation_service, antenna_pattern_ui_state_t &antenna_ui_state, std::function<void()> on_exit)
 {
   // Dockspace
   ImGui::DockSpaceOverViewport(0, ImGui::GetMainViewport());
 
-  render_main_menu(sensors, selected_sensor_index, map, on_exit);
+  render_main_menu(sensors, selected_indices, map, on_exit);
 
   if (m_show_sensor_config)
   {
@@ -99,7 +99,7 @@ void AppUI::render(map_widget_t &map, std::vector<sensor_t> &sensors, int &selec
     ImGui::SetNextWindowSize(ImVec2(370, 600), ImGuiCond_FirstUseEver);
     if (ImGui::Begin("Sensor Configuration", &m_show_sensor_config))
     {
-      render_sensor_config(sensors, selected_sensor_index, map, elevation_service, antenna_ui_state);
+      render_sensor_config(sensors, selected_indices, map, elevation_service, antenna_ui_state);
     }
     ImGui::End();
   }
@@ -114,7 +114,7 @@ void AppUI::render(map_widget_t &map, std::vector<sensor_t> &sensors, int &selec
       render_map_view_controls(map);
 
       // Draw map
-      map.draw(sensors, selected_sensor_index, elevation_service,
+      map.draw(sensors, selected_indices, elevation_service,
                [&](double lat, double lon)
                {
                  // Callback to add sensor
@@ -126,7 +126,8 @@ void AppUI::render(map_widget_t &map, std::vector<sensor_t> &sensors, int &selec
                  auto &s = sensors.back();
                  s.set_mast_height(mast_h); // Set height (AGL)
                  map.invalidate_rf_heatmap();
-                 selected_sensor_index = static_cast<int>(sensors.size()) - 1;
+                 selected_indices.clear();
+                 selected_indices.insert(static_cast<int>(sensors.size()) - 1);
                });
     }
     ImGui::End();
@@ -179,7 +180,7 @@ void AppUI::render(map_widget_t &map, std::vector<sensor_t> &sensors, int &selec
   }
 }
 
-void AppUI::render_main_menu(std::vector<sensor_t> &sensors, int &selected_index, map_widget_t &map, std::function<void()> on_exit)
+void AppUI::render_main_menu(std::vector<sensor_t> &sensors, std::set<int> &selected_index, map_widget_t &map, std::function<void()> on_exit)
 {
   if (ImGui::BeginMainMenuBar())
   {
@@ -192,8 +193,8 @@ void AppUI::render_main_menu(std::vector<sensor_t> &sensors, int &selected_index
       if (ImGui::MenuItem("Load Sensors", "Ctrl+L"))
       {
         persistence::load_sensors(SENSORS_FILE, sensors);
-        if (selected_index >= static_cast<int>(sensors.size()))
-          selected_index = -1;
+        if (!selected_index.empty() && *selected_index.rbegin() >= static_cast<int>(sensors.size()))
+          selected_index.clear();
       }
       ImGui::Separator();
       if (ImGui::MenuItem("Exit", "Alt+F4"))
@@ -209,7 +210,8 @@ void AppUI::render_main_menu(std::vector<sensor_t> &sensors, int &selected_index
       if (ImGui::MenuItem("Add Sensor"))
       {
         sensors.emplace_back("New Sensor", -33.8688, 151.2093, 1000.0);
-        selected_index = static_cast<int>(sensors.size()) - 1;
+        selected_index.clear();
+        selected_index.insert(static_cast<int>(sensors.size()) - 1);
         map.invalidate_rf_heatmap();
       }
       ImGui::EndMenu();
@@ -227,7 +229,7 @@ void AppUI::render_main_menu(std::vector<sensor_t> &sensors, int &selected_index
   }
 }
 
-void AppUI::render_sensor_config(std::vector<sensor_t> &sensors, int &selected_index, map_widget_t &map, elevation_service_t &elevation_service, antenna_pattern_ui_state_t &antenna_ui_state)
+void AppUI::render_sensor_config(std::vector<sensor_t> &sensors, std::set<int> &selected_indices, map_widget_t &map, elevation_service_t &elevation_service, antenna_pattern_ui_state_t &antenna_ui_state)
 {
   // List Area
   ImGui::TextDisabled("SENSORS");
@@ -238,9 +240,27 @@ void AppUI::render_sensor_config(std::vector<sensor_t> &sensors, int &selected_i
       for (int i = 0; i < static_cast<int>(sensors.size()); i++)
       {
         ImGui::PushID(i);
-        const bool is_selected = (selected_index == i);
+        const bool is_selected = selected_indices.contains(i);
         if (ImGui::Selectable(sensors[i].get_name().c_str(), is_selected))
-          selected_index = i;
+        {
+          if (ImGui::GetIO().KeyCtrl)
+          {
+            if (is_selected)
+              selected_indices.erase(i);
+            else
+              selected_indices.insert(i);
+          }
+          else if (ImGui::GetIO().KeyShift)
+          {
+            // Range select (simplified: just add for now, properly requires last clicked state)
+            selected_indices.insert(i);
+          }
+          else
+          {
+            selected_indices.clear();
+            selected_indices.insert(i);
+          }
+        }
 
         if (is_selected)
           ImGui::SetItemDefaultFocus();
@@ -253,17 +273,25 @@ void AppUI::render_sensor_config(std::vector<sensor_t> &sensors, int &selected_i
     if (ImGui::Button("Add New", ImVec2(80, 0)))
     {
       sensors.emplace_back("New Sensor", -33.8688, 151.2093, 1000.0);
-      selected_index = static_cast<int>(sensors.size()) - 1;
+      selected_indices.clear();
+      selected_indices.insert(static_cast<int>(sensors.size()) - 1);
       map.invalidate_rf_heatmap();
     }
     ImGui::SameLine();
     if (ImGui::Button("Delete", ImVec2(80, 0)))
     {
-      if (selected_index >= 0 && selected_index < static_cast<int>(sensors.size()))
+      if (!selected_indices.empty())
       {
-        sensors.erase(sensors.begin() + selected_index);
-        if (selected_index >= static_cast<int>(sensors.size()))
-          selected_index = static_cast<int>(sensors.size()) - 1;
+        // Delete in reverse order to preserve indices of remaining
+        for (auto it = selected_indices.rbegin(); it != selected_indices.rend(); ++it)
+        {
+          int idx = *it;
+          if (idx >= 0 && idx < sensors.size())
+          {
+            sensors.erase(sensors.begin() + idx);
+          }
+        }
+        selected_indices.clear();
         map.invalidate_rf_heatmap();
       }
     }
@@ -275,187 +303,259 @@ void AppUI::render_sensor_config(std::vector<sensor_t> &sensors, int &selected_i
   ImGui::Spacing();
 
   // Details Area
-  if (selected_index >= 0 && selected_index < static_cast<int>(sensors.size()))
+  if (selected_indices.size() == 1)
   {
-    sensor_t &sensor = sensors[selected_index];
-    bool sensor_modified = false;
-
-    // Use Tabs for cleaner config
-    if (ImGui::BeginTabBar("SensorTabs"))
+    int idx = *selected_indices.begin();
+    if (idx >= 0 && idx < static_cast<int>(sensors.size()))
     {
-      // --- GENERAL TAB ---
-      if (ImGui::BeginTabItem("General"))
+      sensor_t &sensor = sensors[idx];
+      bool sensor_modified = false;
+
+      // Use Tabs for cleaner config
+      if (ImGui::BeginTabBar("SensorTabs"))
       {
-        ImGui::Spacing();
-
-        char name_buffer[128];
-        snprintf(name_buffer, sizeof(name_buffer), "%s", sensor.get_name().c_str());
-        if (ImGui::InputText("Name", name_buffer, sizeof(name_buffer)))
+        // --- GENERAL TAB ---
+        if (ImGui::BeginTabItem("General"))
         {
-          sensor.set_name(std::string(name_buffer));
-        }
+          ImGui::Spacing();
 
-        if (ImGui::Button("Focus Camera", ImVec2(-1, 0)))
-        {
-          map.set_center(sensor.get_latitude(), sensor.get_longitude());
-          if (map.get_zoom() < 16.0)
-            map.set_zoom(16.0);
-        }
-
-        ImGui::Spacing();
-        ImGui::Separator();
-        ImGui::TextDisabled("LOCATION");
-
-        double lat = sensor.get_latitude();
-        if (ImGui::InputDouble("Lat", &lat, 0.0001, 0.001, "%.6f"))
-        {
-          sensor.set_latitude(lat);
-          sensor_modified = true;
-        }
-
-        double lon = sensor.get_longitude();
-        if (ImGui::InputDouble("Lon", &lon, 0.0001, 0.001, "%.6f"))
-        {
-          sensor.set_longitude(lon);
-          sensor_modified = true;
-        }
-
-        if (ImGui::Button("Snap to Building", ImVec2(-1, 0)))
-        {
-          map.fetch_buildings_near(lat, lon);
-          double b_h = map.get_building_at_location(lat, lon);
-          if (b_h > 0)
+          char name_buffer[128];
+          snprintf(name_buffer, sizeof(name_buffer), "%s", sensor.get_name().c_str());
+          if (ImGui::InputText("Name", name_buffer, sizeof(name_buffer)))
           {
-            sensor.set_mast_height(b_h);
+            sensor.set_name(std::string(name_buffer));
+          }
+
+          if (ImGui::Button("Focus Camera", ImVec2(-1, 0)))
+          {
+            map.set_center(sensor.get_latitude(), sensor.get_longitude());
+            if (map.get_zoom() < 16.0)
+              map.set_zoom(16.0);
+          }
+
+          ImGui::Spacing();
+          ImGui::Separator();
+          ImGui::TextDisabled("LOCATION");
+
+          double lat = sensor.get_latitude();
+          if (ImGui::InputDouble("Lat", &lat, 0.0001, 0.001, "%.6f"))
+          {
+            sensor.set_latitude(lat);
             sensor_modified = true;
           }
+
+          double lon = sensor.get_longitude();
+          if (ImGui::InputDouble("Lon", &lon, 0.0001, 0.001, "%.6f"))
+          {
+            sensor.set_longitude(lon);
+            sensor_modified = true;
+          }
+
+          if (ImGui::Button("Snap to Building", ImVec2(-1, 0)))
+          {
+            map.fetch_buildings_near(lat, lon);
+            double b_h = map.get_building_at_location(lat, lon);
+            if (b_h > 0)
+            {
+              sensor.set_mast_height(b_h);
+              sensor_modified = true;
+            }
+          }
+
+          ImGui::Spacing();
+          ImGui::Separator();
+          ImGui::TextDisabled("VISUALIZATION");
+          ImGui::ColorEdit3("Color", sensor.get_color_data());
+
+          ImGui::EndTabItem();
         }
 
-        ImGui::Spacing();
-        ImGui::Separator();
-        ImGui::TextDisabled("VISUALIZATION");
-        ImGui::ColorEdit3("Color", sensor.get_color_data());
+        // --- RF TAB ---
+        if (ImGui::BeginTabItem("RF"))
+        {
+          ImGui::Spacing();
 
-        ImGui::EndTabItem();
+          double range = sensor.get_range();
+          if (ImGui::InputDouble("Range (m)", &range, 100.0, 1000.0))
+          {
+            sensor.set_range(range);
+            sensor_modified = true;
+          }
+
+          double mast_height = sensor.get_mast_height();
+          if (ImGui::InputDouble("Mast (m)", &mast_height, 1.0, 5.0))
+          {
+            sensor.set_mast_height(mast_height);
+            sensor_modified = true;
+          }
+
+          ImGui::Spacing();
+
+          int current_model = static_cast<int>(sensor.get_propagation_model());
+          const char *model_names[] = {"Free Space", "Hata (Urban)", "Hata (Suburban)", "Hata (Rural)"};
+          if (ImGui::Combo("Model", &current_model, model_names, IM_ARRAYSIZE(model_names)))
+          {
+            sensor.set_propagation_model(static_cast<sensor_mapper::PropagationModel>(current_model));
+            sensor_modified = true;
+          }
+
+          ImGui::Separator();
+          ImGui::TextDisabled("ELEVATION");
+
+          bool use_auto = sensor.get_use_auto_elevation();
+          if (ImGui::Checkbox("Auto Terrain Alt.", &use_auto))
+          {
+            sensor.set_use_auto_elevation(use_auto);
+            sensor_modified = true;
+          }
+
+          double ground_elevation = sensor.get_ground_elevation();
+          if (use_auto)
+          {
+            float fetched_h;
+            if (elevation_service.get_elevation(sensor.get_latitude(), sensor.get_longitude(), fetched_h))
+            {
+              ground_elevation = static_cast<double>(fetched_h);
+              sensor.set_ground_elevation(ground_elevation);
+            }
+            ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f), "Current: %.1f m", ground_elevation);
+          }
+          else
+          {
+            if (ImGui::InputDouble("Manual Elev", &ground_elevation))
+            {
+              sensor.set_ground_elevation(ground_elevation);
+              sensor_modified = true;
+            }
+          }
+
+          ImGui::EndTabItem();
+        }
+
+        // --- ANTENNA TAB ---
+        if (ImGui::BeginTabItem("Antenna"))
+        {
+          ImGui::Spacing();
+
+          float azimuth = static_cast<float>(sensor.get_azimuth_deg());
+          if (ImGui::SliderFloat("Azimuth", &azimuth, 0.0f, 360.0f, "%.0f deg"))
+          {
+            sensor.set_azimuth_deg(static_cast<double>(azimuth));
+            sensor_modified = true;
+          }
+
+          float beamwidth = static_cast<float>(sensor.get_beamwidth_deg());
+          if (ImGui::SliderFloat("Beamwidth", &beamwidth, 1.0f, 360.0f, "%.0f deg"))
+          {
+            sensor.set_beamwidth_deg(static_cast<double>(beamwidth));
+            sensor_modified = true;
+          }
+
+          ImGui::Separator();
+
+          auto current_pattern = sensor.get_pattern();
+          if (antenna_pattern_ui_t::render_pattern_selector(current_pattern, antenna_ui_state))
+          {
+            sensor.set_custom_pattern(current_pattern);
+            sensor_modified = true;
+          }
+
+          if (current_pattern)
+          {
+            ImGui::Indent();
+            ImGui::TextDisabled("PATTERN TWEAKS");
+            float e_tilt = static_cast<float>(sensor.get_electrical_tilt_deg());
+            if (ImGui::SliderFloat("E-Tilt", &e_tilt, -30.0f, 30.0f, "%.1f deg"))
+            {
+              sensor.set_electrical_tilt_deg(static_cast<double>(e_tilt));
+              sensor_modified = true;
+            }
+
+            float m_tilt = static_cast<float>(sensor.get_mechanical_tilt_deg());
+            if (ImGui::SliderFloat("M-Tilt", &m_tilt, -30.0f, 30.0f, "%.1f deg"))
+            {
+              sensor.set_mechanical_tilt_deg(static_cast<double>(m_tilt));
+              sensor_modified = true;
+            }
+            ImGui::Unindent();
+          }
+
+          ImGui::EndTabItem();
+        }
+
+        ImGui::EndTabBar();
       }
 
-      // --- RF TAB ---
-      if (ImGui::BeginTabItem("RF"))
-      {
-        ImGui::Spacing();
+      if (sensor_modified)
+        map.invalidate_rf_heatmap();
+    }
+  }
+  else if (selected_indices.size() > 1)
+  {
+    ImGui::TextDisabled("BULK EDIT (%zu Sensors)", selected_indices.size());
+    ImGui::Separator();
 
-        double range = sensor.get_range();
-        if (ImGui::InputDouble("Range (m)", &range, 100.0, 1000.0))
-        {
-          sensor.set_range(range);
-          sensor_modified = true;
-        }
+    bool modified = false;
 
-        double mast_height = sensor.get_mast_height();
-        if (ImGui::InputDouble("Mast (m)", &mast_height, 1.0, 5.0))
-        {
-          sensor.set_mast_height(mast_height);
-          sensor_modified = true;
-        }
+    // We can only reliably bulk edit shared scalar properties like Color, Frequency (not stored in sensor_t yet), Range, Power, etc.
+    // But sensor_t doesn't have Tx Power exposed in UI yet? No, it doesn't. Just Range.
+    // Let's create a proxy Sensor representing the "Shared" state? Or just apply changes blindly.
 
-        ImGui::Spacing();
-
-        int current_model = static_cast<int>(sensor.get_propagation_model());
-        const char *model_names[] = {"Free Space", "Hata (Urban)", "Hata (Suburban)", "Hata (Rural)"};
-        if (ImGui::Combo("Model", &current_model, model_names, IM_ARRAYSIZE(model_names)))
-        {
-          sensor.set_propagation_model(static_cast<sensor_mapper::PropagationModel>(current_model));
-          sensor_modified = true;
-        }
-
-        ImGui::Separator();
-        ImGui::TextDisabled("ELEVATION");
-
-        bool use_auto = sensor.get_use_auto_elevation();
-        if (ImGui::Checkbox("Auto Terrain Alt.", &use_auto))
-        {
-          sensor.set_use_auto_elevation(use_auto);
-          sensor_modified = true;
-        }
-
-        double ground_elevation = sensor.get_ground_elevation();
-        if (use_auto)
-        {
-          float fetched_h;
-          if (elevation_service.get_elevation(sensor.get_latitude(), sensor.get_longitude(), fetched_h))
-          {
-            ground_elevation = static_cast<double>(fetched_h);
-            sensor.set_ground_elevation(ground_elevation);
-          }
-          ImGui::TextColored(ImVec4(0.5f, 1.0f, 0.5f, 1.0f), "Current: %.1f m", ground_elevation);
-        }
-        else
-        {
-          if (ImGui::InputDouble("Manual Elev", &ground_elevation))
-          {
-            sensor.set_ground_elevation(ground_elevation);
-            sensor_modified = true;
-          }
-        }
-
-        ImGui::EndTabItem();
-      }
-
-      // --- ANTENNA TAB ---
-      if (ImGui::BeginTabItem("Antenna"))
-      {
-        ImGui::Spacing();
-
-        float azimuth = static_cast<float>(sensor.get_azimuth_deg());
-        if (ImGui::SliderFloat("Azimuth", &azimuth, 0.0f, 360.0f, "%.0f deg"))
-        {
-          sensor.set_azimuth_deg(static_cast<double>(azimuth));
-          sensor_modified = true;
-        }
-
-        float beamwidth = static_cast<float>(sensor.get_beamwidth_deg());
-        if (ImGui::SliderFloat("Beamwidth", &beamwidth, 1.0f, 360.0f, "%.0f deg"))
-        {
-          sensor.set_beamwidth_deg(static_cast<double>(beamwidth));
-          sensor_modified = true;
-        }
-
-        ImGui::Separator();
-
-        auto current_pattern = sensor.get_pattern();
-        if (antenna_pattern_ui_t::render_pattern_selector(current_pattern, antenna_ui_state))
-        {
-          sensor.set_custom_pattern(current_pattern);
-          sensor_modified = true;
-        }
-
-        if (current_pattern)
-        {
-          ImGui::Indent();
-          ImGui::TextDisabled("PATTERN TWEAKS");
-          float e_tilt = static_cast<float>(sensor.get_electrical_tilt_deg());
-          if (ImGui::SliderFloat("E-Tilt", &e_tilt, -30.0f, 30.0f, "%.1f deg"))
-          {
-            sensor.set_electrical_tilt_deg(static_cast<double>(e_tilt));
-            sensor_modified = true;
-          }
-
-          float m_tilt = static_cast<float>(sensor.get_mechanical_tilt_deg());
-          if (ImGui::SliderFloat("M-Tilt", &m_tilt, -30.0f, 30.0f, "%.1f deg"))
-          {
-            sensor.set_mechanical_tilt_deg(static_cast<double>(m_tilt));
-            sensor_modified = true;
-          }
-          ImGui::Unindent();
-        }
-
-        ImGui::EndTabItem();
-      }
-
-      ImGui::EndTabBar();
+    static double shared_range = 1000.0;
+    static bool range_init = false;
+    if (!range_init)
+    {
+      // Initialize with first selected
+      // But actually we should just show the slider and apply value.
+      // Or show "Unchanged" if mixed? ImGui doesn't support mixed very well without multi-value widgets.
+      // Let's just have an "Apply" button or apply immediately.
     }
 
-    if (sensor_modified)
+    if (ImGui::Button("Set Range to 1km"))
+    {
+      for (int idx : selected_indices)
+        sensors[idx].set_range(1000.0);
+      modified = true;
+    }
+    if (ImGui::Button("Set Range to 5km"))
+    {
+      for (int idx : selected_indices)
+        sensors[idx].set_range(5000.0);
+      modified = true;
+    }
+
+    ImGui::Spacing();
+    ImGui::Text("Propagation Model");
+    int current_model = 0; // Default to Free Space
+    const char *model_names[] = {"Free Space", "Hata (Urban)", "Hata (Suburban)", "Hata (Rural)"};
+    if (ImGui::Combo("##bulk_model", &current_model, model_names, IM_ARRAYSIZE(model_names)))
+    {
+      for (int idx : selected_indices)
+        sensors[idx].set_propagation_model(static_cast<sensor_mapper::PropagationModel>(current_model));
+      modified = true;
+    }
+
+    ImGui::Spacing();
+    ImGui::Text("Color");
+    static float shared_color[3] = {1.0f, 0.0f, 0.0f};
+    if (ImGui::ColorEdit3("##bulk_color", shared_color))
+    {
+      // Apply to all
+      for (int idx : selected_indices)
+      {
+        // sensor_t uses float* get_color_data() returning internal pointer.
+        // We can copy to it.
+        float *c = sensors[idx].get_color_data();
+        c[0] = shared_color[0];
+        c[1] = shared_color[1];
+        c[2] = shared_color[2];
+      }
+      // Do not invalidate heatmap for color change usually? Actually color is CPU-side for points?
+      // If color is used for heatmap (no, heatmap is signal), then fine.
+      // But sensor points draw uses color.
+    }
+
+    if (modified)
       map.invalidate_rf_heatmap();
   }
   else
@@ -589,6 +689,13 @@ void AppUI::render_map_view_controls(map_widget_t &map)
     ImGui::SetTooltip("Show coverage heatmap");
 
   ImGui::SameLine();
+  bool show_overlap = (map.get_viz_mode() == 1);
+  if (ImGui::Checkbox("Overlap", &show_overlap))
+    map.set_viz_mode(show_overlap ? 1 : 0);
+  if (ImGui::IsItemHovered())
+    ImGui::SetTooltip("Show sensor overlap count");
+
+  ImGui::SameLine();
   bool show_bldg = map.get_show_buildings();
   if (ImGui::Checkbox("Bldg", &show_bldg))
     map.set_show_buildings(show_bldg);
@@ -617,6 +724,22 @@ void AppUI::render_map_view_controls(map_widget_t &map)
   }
   if (ImGui::IsItemHovered())
     ImGui::SetTooltip("Min Signal Threshold");
+
+  ImGui::SameLine();
+  if (ImGui::Button("Export"))
+  {
+    if (map.export_coverage_map("coverage_export.ppm"))
+    {
+      // Maybe show a toast/notification? For now, console only
+      printf("Exported coverage to coverage_export.ppm\n");
+    }
+    else
+    {
+      printf("Failed to export coverage map\n");
+    }
+  }
+  if (ImGui::IsItemHovered())
+    ImGui::SetTooltip("Export current coverage view to PPM file");
 
   ImGui::PopStyleVar();
   ImGui::Separator();

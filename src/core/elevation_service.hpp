@@ -1,6 +1,6 @@
 #pragma once
 
-#include "core/elevation_source.hpp"
+#include "elevation_source.hpp"
 #include <vector>
 #include <memory>
 #include <string>

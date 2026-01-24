@@ -176,6 +176,8 @@ set(SOURCES_UI
   src/ui/app_ui.hpp
   src/ui/antenna_pattern_ui.hpp
   src/ui/antenna_pattern_3d_viewer.hpp
+  src/ui/image_exporter.cpp
+  src/ui/image_exporter.hpp
 )
 
 set(SOURCES

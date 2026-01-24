@@ -4,6 +4,7 @@
 #include "imgui_impl_opengl3.h"
 #include <GLFW/glfw3.h>
 #include <iostream>
+#include <set>
 // #include <vector> // Removed (transitive)
 #include "core/persistence.hpp"
 // #include "core/sensor.hpp" // Removed (transitive)
@@ -71,7 +72,9 @@ int main(int, char **)
 
   // Try loading
   sensor_mapper::persistence::load_sensors(SENSORS_FILE, sensors);
-  int selected_sensor_index = 0;
+  std::set<int> selected_sensor_indices;
+  if (!sensors.empty())
+    selected_sensor_indices.insert(0);
 
   // Antenna Pattern UI State
   sensor_mapper::antenna_pattern_ui_state_t antenna_ui_state;
@@ -96,7 +99,7 @@ int main(int, char **)
     } exit_ctx = {window};
 
     // Core UI Logic
-    app_ui.render(map_widget, sensors, selected_sensor_index, elevation_service, antenna_ui_state, [&exit_ctx]() { glfwSetWindowShouldClose(exit_ctx.win, 1); });
+    app_ui.render(map_widget, sensors, selected_sensor_indices, elevation_service, antenna_ui_state, [&exit_ctx]() { glfwSetWindowShouldClose(exit_ctx.win, 1); });
 
     // Rendering
     ImGui::Render();

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <vector>
+#include <set>
 #include <functional>
 #include "core/sensor.hpp"
 #include "core/elevation_service.hpp"
@@ -20,11 +21,11 @@ public:
   void setup_style();
 
   // Main render function
-  void render(map_widget_t &map, std::vector<sensor_t> &sensors, int &selected_sensor_index, elevation_service_t &elevation_service, antenna_pattern_ui_state_t &antenna_ui_state, std::function<void()> on_exit);
+  void render(map_widget_t &map, std::vector<sensor_t> &sensors, std::set<int> &selected_indices, elevation_service_t &elevation_service, antenna_pattern_ui_state_t &antenna_ui_state, std::function<void()> on_exit);
 
 private:
-  void render_main_menu(std::vector<sensor_t> &sensors, int &selected_index, map_widget_t &map, std::function<void()> on_exit);
-  void render_sensor_config(std::vector<sensor_t> &sensors, int &selected_index, map_widget_t &map, elevation_service_t &elevation_service, antenna_pattern_ui_state_t &antenna_ui_state);
+  void render_main_menu(std::vector<sensor_t> &sensors, std::set<int> &selected_indices, map_widget_t &map, std::function<void()> on_exit);
+  void render_sensor_config(std::vector<sensor_t> &sensors, std::set<int> &selected_indices, map_widget_t &map, elevation_service_t &elevation_service, antenna_pattern_ui_state_t &antenna_ui_state);
   void render_map_view_controls(map_widget_t &map);
   void render_elevation_data(elevation_service_t &elevation_service, map_widget_t &map);
   void render_tdoa_analysis(map_widget_t &map, const std::vector<sensor_t> &sensors);

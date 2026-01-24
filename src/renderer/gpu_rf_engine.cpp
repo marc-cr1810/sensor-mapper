@@ -224,7 +224,7 @@ auto gpu_rf_engine_t::generate_elevation_data(elevation_service_t *service, cons
   return flipped_data;
 }
 
-auto gpu_rf_engine_t::render(const std::vector<sensor_t> &sensors, elevation_service_t *service, const building_service_t *building_service, double min_lat, double max_lat, double min_lon, double max_lon, float min_signal_dbm)
+auto gpu_rf_engine_t::render(const std::vector<sensor_t> &sensors, elevation_service_t *service, const building_service_t *building_service, double min_lat, double max_lat, double min_lon, double max_lon, float min_signal_dbm, int viz_mode)
     -> render_result_t
 {
   // 1. Check if background tasks are done
@@ -305,6 +305,8 @@ precision highp float;
 layout(location = 0) out vec4 FragColor;
 layout(location = 1) out float FragData;
 
+float fragDataVal; // Temporary variable
+
 in vec2 v_texcoord;
 
 uniform sampler2D u_elevation_tex;
@@ -334,6 +336,7 @@ uniform vec4 u_sensor_params_2[MAX_SENSORS];  // x=gain, y=mast, z=ground, w=mod
 uniform vec2 u_lat_range; // x=min_lat, y=max_lat
 uniform vec2 u_lon_range; // x=min_lon, y=max_lon
 uniform float u_min_signal_dbm; // Minimum signal threshold to display
+uniform int u_viz_mode; // 0=Heatmap, 1=Overlap
 
 float get_elevation(vec2 uv) {
     return texture(u_elevation_tex, uv).r;
@@ -400,10 +403,12 @@ void main() {
     float my_lat_abs = u_lat_range.y - v_texcoord.y * lat_delta_deg;
 
     float max_dbm = -200.0;
+    int overlap_count = 0;
 
     for(int i=0; i<MAX_SENSORS; ++i) {
         if (i >= u_sensor_count) break;
-        if (max_dbm >= -10.0) break; 
+        // In Overlap mode (1), we need to check ALL sensors, so disable early exit optimization
+        if (u_viz_mode == 0 && max_dbm >= -10.0) break; 
 
         vec2 s_uv = u_sensor_pos_range[i].xy;
         float s_range = u_sensor_pos_range[i].z; 
@@ -503,26 +508,62 @@ void main() {
         }
 
         float rx = tx_pwr + gain - quick_loss - pattern_loss - diffraction_loss;
-        max_dbm = max(max_dbm, rx);
+        
+        if (u_viz_mode == 0) {
+            max_dbm = max(max_dbm, rx);
+        } else {
+            // Overlap Mode: Check threshold
+            if (rx > u_min_signal_dbm) {
+                overlap_count++;
+            }
+        }
     }
     
-    // Output Data
-    FragData = max_dbm;
+    fragDataVal = max_dbm; // Always output max_dbm for data readback? Or overlap count?
+    // User might want to query signal strength even in overlap mode?
+    // But read_dbm_at expects float. Let's output max_dbm still if possible, or overlap count.
+    // If we are in overlap mode, max_dbm is -200.0 (uninitialized).
+    // Let's keep max_dbm logic valid? No, we skipped it.
+    // Let's just output thresholded count as "signal" for now in data channel if easy?
+    // Actually, data readback `read_dbm_at` is used for the cursor tooltip.
+    // Ideally we want signal strength tooltip even in overlap mode.
+    // But that would require calculating max_dbm AND overlap count.
+    // Optimization trade-off. Let's stick to what we calculated.
+    if (u_viz_mode == 1) {
+        fragDataVal = float(overlap_count); 
+    } else {
+        fragDataVal = max_dbm;
+    }
+    FragData = fragDataVal;
 
     // Output Visualization
     vec4 col = vec4(0.0);
-    // Use u_min_signal_dbm ONLY for cutoff
-    if (max_dbm > u_min_signal_dbm) {
-        // Use fixed range for consistent colors
-        float val = (max_dbm - COLOR_MIN_DBM) / (COLOR_MAX_DBM - COLOR_MIN_DBM);
-        val = clamp(val, 0.0, 1.0);
-        
-        float r = turbo_r(val);
-        float g = turbo_g(val);
-        float b = turbo_b(val);
-        float a = 0.4 + val * 0.6; // Keep alpha scaling or make it fixed? Keeping it gives nice fade feel.
-        
-        col = vec4(r, g, b, a);
+    
+    if (u_viz_mode == 0) {
+        // Heatmap Mode
+        if (max_dbm > u_min_signal_dbm) {
+            // Use fixed range for consistent colors
+            float val = (max_dbm - COLOR_MIN_DBM) / (COLOR_MAX_DBM - COLOR_MIN_DBM);
+            val = clamp(val, 0.0, 1.0);
+            
+            float r = turbo_r(val);
+            float g = turbo_g(val);
+            float b = turbo_b(val);
+            float a = 0.4 + val * 0.6; 
+            
+            col = vec4(r, g, b, a);
+        }
+    } else {
+        // Overlap Mode
+        if (overlap_count > 0) {
+            if (overlap_count >= 3) {
+                col = vec4(0.0, 1.0, 0.0, 0.6); // Green (Good for TDOA)
+            } else if (overlap_count == 2) {
+                col = vec4(1.0, 1.0, 0.0, 0.6); // Yellow (Marginal)
+            } else {
+                col = vec4(1.0, 0.0, 0.0, 0.6); // Red (Single detection)
+            }
+        }
     }
     FragColor = col;
 }
@@ -561,6 +602,7 @@ void main() {
   m_shader->set_vec2("u_lon_range", (float)cur_min_lon, (float)cur_max_lon);
 
   m_shader->set_float("u_min_signal_dbm", min_signal_dbm);
+  m_shader->set_int("u_viz_mode", viz_mode);
 
   std::vector<size_t> sensor_indices(sensors.size());
   for (size_t i = 0; i < sensors.size(); ++i)
