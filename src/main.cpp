@@ -4,10 +4,9 @@
 #include "imgui_impl_opengl3.h"
 #include <GLFW/glfw3.h>
 #include <iostream>
-#include <vector>
-
+// #include <vector> // Removed (transitive)
 #include "core/persistence.hpp"
-#include "core/sensor.hpp"
+// #include "core/sensor.hpp" // Removed (transitive)
 #include "ui/app_ui.hpp"
 
 // Forward declaration

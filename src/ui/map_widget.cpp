@@ -125,35 +125,6 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors, int &selected_inde
     m_cursor_alt = 0.0; // or last known
   }
 
-  ImGui::Text("Cursor: %.5f, %.5f | Alt: %.1f m | Zoom: %.2f", m_mouse_lat, m_mouse_lon, m_cursor_alt, m_zoom);
-
-  // Zoom controls (Buttons)
-  if (ImGui::Button("Zoom In"))
-    set_zoom(m_zoom + 1.0);
-  ImGui::SameLine();
-  if (ImGui::Button("Zoom Out"))
-    if (ImGui::Button("Zoom Out"))
-      set_zoom(m_zoom - 1.0);
-
-  ImGui::SameLine();
-  if (ImGui::Combo("Map Source", &m_current_map_source, "OpenStreetMap\0Terrain Heightmap\0Satellite (Esri)\0"))
-  {
-    set_map_source(m_current_map_source);
-  }
-
-  ImGui::SameLine();
-  bool show_elev = m_show_elevation_sources;
-  if (ImGui::Checkbox("Show Elev. Sources", &show_elev))
-  {
-    set_show_elevation_sources(show_elev);
-  }
-  ImGui::SameLine();
-  bool show_raster = m_show_raster_visual;
-  if (ImGui::Checkbox("Show Raster Visual", &show_raster))
-  {
-    set_show_raster_visual(show_raster);
-  }
-
   // Simple canvas
   ImVec2 canvas_p0 = ImGui::GetCursorScreenPos();
   ImVec2 canvas_sz_raw = ImGui::GetContentRegionAvail();
@@ -1177,8 +1148,8 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors, int &selected_inde
         cache_valid = true;
       }
 
-      // --- Draw Raycast Coverage (Suppress if GPU Heatmap/Composite is active) ---
-      if (!m_show_heatmap_overlay && !m_show_composite)
+      // --- Draw Raycast Coverage (Suppress if GPU Heatmap/Composite is active, UNLESS RF Gradient is explicitly requested) ---
+      if (m_show_rf_gradient || (!m_show_heatmap_overlay && !m_show_composite))
       {
         // Colors
         // Range stays green
