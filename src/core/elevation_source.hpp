@@ -14,6 +14,12 @@ public:
   // Update routine for async loading
   virtual auto update() -> void = 0;
 
+  // param: min_lat, max_lat, min_lon, max_lon
+  virtual auto get_bounds(double &min_lat, double &max_lat, double &min_lon, double &max_lon) const -> bool
+  {
+    return false;
+  }
+
   // Name/Type of source
   virtual auto get_name() const -> const char * = 0;
 };

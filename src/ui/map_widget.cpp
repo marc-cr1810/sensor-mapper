@@ -141,6 +141,13 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors, int &selected_inde
     set_map_source(m_current_map_source);
   }
 
+  ImGui::SameLine();
+  bool show_elev = m_show_elevation_sources;
+  if (ImGui::Checkbox("Show Elev. Sources", &show_elev))
+  {
+    set_show_elevation_sources(show_elev);
+  }
+
   // Simple canvas
   ImVec2 canvas_p0 = ImGui::GetCursorScreenPos();
   ImVec2 canvas_sz_raw = ImGui::GetContentRegionAvail();
@@ -706,6 +713,47 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors, int &selected_inde
         {
           selected_index = static_cast<int>(idx);
         }
+      }
+    }
+  }
+
+  // --- Draw Elevation Source Bounds ---
+  if (m_show_elevation_sources)
+  {
+    const auto &sources = elevation_service.get_sources();
+    for (const auto &source : sources)
+    {
+      double min_lat, max_lat, min_lon, max_lon;
+      if (source->get_bounds(min_lat, max_lat, min_lon, max_lon))
+      {
+        // Convert to World Coords
+        double min_wx, min_wy, max_wx, max_wy;
+        geo::lat_lon_to_world(max_lat, min_lon, min_wx, min_wy); // Top Left (Lat is max)
+        geo::lat_lon_to_world(min_lat, max_lon, max_wx, max_wy); // Bottom Right (Lat is min)
+
+        // Adjust relative to center (World Wrap)
+        auto wrap = [&](double &v, double center)
+        {
+          if (v - center > 0.5)
+            v -= 1.0;
+          if (v - center < -0.5)
+            v += 1.0;
+        };
+        wrap(min_wx, center_wx);
+        wrap(max_wx, center_wx);
+
+        // Note: max_wx might now be LESS than min_wx if we wrapped weirdly, but usually small bounds won't wrap unless on antimeridian.
+        // If crossing antimeridian, this simple logic draws a box across the world.
+        // For local files, assume they don't cross antimeridian for now.
+
+        float x0 = static_cast<float>((min_wx - center_wx) * world_size_pixels + screen_center.x);
+        float y0 = static_cast<float>((min_wy - center_wy) * world_size_pixels + screen_center.y);
+        float x1 = static_cast<float>((max_wx - center_wx) * world_size_pixels + screen_center.x);
+        float y1 = static_cast<float>((max_wy - center_wy) * world_size_pixels + screen_center.y);
+
+        // Draw rect
+        draw_list->AddRect(ImVec2(x0, y0), ImVec2(x1, y1), IM_COL32(255, 100, 0, 255), 0.0f, 0, 2.0f);
+        draw_list->AddText(ImVec2(x0, y0 - 15), IM_COL32(255, 100, 0, 255), source->get_name());
       }
     }
   }

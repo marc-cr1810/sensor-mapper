@@ -71,6 +71,15 @@ public:
     m_show_buildings = show;
   }
 
+  auto get_show_elevation_sources() const -> bool
+  {
+    return m_show_elevation_sources;
+  }
+  auto set_show_elevation_sources(bool show) -> void
+  {
+    m_show_elevation_sources = show;
+  }
+
   auto get_show_heatmap_overlay() const -> bool
   {
     return m_show_heatmap_overlay;
@@ -204,6 +213,7 @@ private:
   bool m_show_rf_gradient; // Show RF signal strength gradient (default: off)
   bool m_show_composite = false;
   bool m_show_buildings = false;
+  bool m_show_elevation_sources = false;
   bool m_show_heatmap_overlay = true; // Show GPU-rendered coverage overlay
 
   float m_min_signal_dbm = -90.0f; // Minimum signal strength to display (dBm)

@@ -6,6 +6,7 @@
 #include <vector>
 #include <memory>
 #include <filesystem>
+#include <future>
 
 namespace sensor_mapper
 {
@@ -17,6 +18,7 @@ public:
   ~lidar_source_t() override;
 
   auto get_elevation(double lat, double lon, float &out_height) -> bool override;
+  auto get_bounds(double &min_lat, double &max_lat, double &min_lon, double &max_lon) const -> bool override;
   auto update() -> void override;
   auto get_name() const -> const char * override
   {
@@ -27,6 +29,10 @@ public:
 
 private:
   std::filesystem::path m_path;
+
+  // Async Loading State
+  std::future<bool> m_load_future;
+  bool m_loading_started = false;
 
   // Rasterized DSM from LAS points
   std::vector<float> m_data; // Grid of max Z values
