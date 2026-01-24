@@ -2,6 +2,7 @@
 #include "core/terrarium_source.hpp"
 #include "core/geotiff_source.hpp"
 #include "core/lidar_source.hpp"
+#include "core/geo_math.hpp"
 #include <algorithm>
 #include <filesystem>
 
@@ -64,7 +65,32 @@ auto elevation_service_t::get_elevation(double lat, double lon, float &out_heigh
   return false;
 }
 
+auto elevation_service_t::get_profile(double start_lat, double start_lon, double end_lat, double end_lon, int num_samples) -> std::vector<std::pair<double, float>>
+{
+  std::vector<std::pair<double, float>> profile;
+  profile.reserve(num_samples);
+
+  double total_dist = geo::distance(start_lat, start_lon, end_lat, end_lon);
+
+  for (int i = 0; i < num_samples; ++i)
+  {
+    double t = (double)i / (num_samples - 1);
+    double lat, lon;
+    geo::interpolate(start_lat, start_lon, end_lat, end_lon, t, lat, lon);
+
+    float ele = 0.0f;
+    if (!get_elevation(lat, lon, ele))
+    {
+      ele = 0.0f; // Default if no data
+    }
+
+    profile.push_back({total_dist * t, ele});
+  }
+  return profile;
+}
+
 auto elevation_service_t::update() -> void
+
 {
   for (auto &source : m_sources)
   {

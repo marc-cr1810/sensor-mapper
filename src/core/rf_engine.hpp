@@ -37,6 +37,12 @@ public:
 
   static auto calculate_hata(double d_km, double f_mhz, double h_tx, double h_rx, PropagationModel model) -> double;
 
+  // Calculate radius of the nth Fresnel zone at a specific distance point
+  // d1: distance from first endpoint (meters)
+  // d2: distance from second endpoint (meters)
+  // wavelength: signal wavelength (meters)
+  static auto calculate_fresnel_zone(double d1, double d2, double wavelength, int n = 1) -> double;
+
 private:
   struct impl_t;
   // std::unique_ptr<impl_t> m_impl; // No state needed yet, just threads

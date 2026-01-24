@@ -204,4 +204,10 @@ auto rf_engine_t::compute_coverage(const std::vector<sensor_t> &sensors, elevati
                     });
 }
 
+auto rf_engine_t::calculate_fresnel_zone(double d1, double d2, double wavelength, int n) -> double
+{
+  // Rn = sqrt( (n * lambda * d1 * d2) / (d1 + d2) )
+  return std::sqrt((n * wavelength * d1 * d2) / (d1 + d2));
+}
+
 } // namespace sensor_mapper

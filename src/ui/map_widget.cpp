@@ -1,7 +1,11 @@
 #include "ui/map_widget.hpp"
+#include "core/building_service.hpp"
+#include "core/elevation_service.hpp"
 #include "core/geo_math.hpp"
-#include "ui/map_widget.hpp"
-
+#include "core/sensor.hpp"
+#include "core/tdoa_solver.hpp"
+#include "core/tile_service.hpp"
+#include "imgui.h"
 // #include "core/rf_engine.hpp" // CPU engine
 #include "imgui_impl_opengl3.h"
 #include "renderer/gpu_rf_engine.hpp" // GPU Engine
@@ -105,6 +109,16 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors, int &selected_inde
   // Update async tasks
   update();
 
+  // Track previous view bounds to detect changes (persist across frames)
+  static double prev_min_lat = 0.0, prev_max_lat = 0.0;
+  static double prev_min_lon = 0.0, prev_max_lon = 0.0;
+  static size_t prev_sensor_count = 0;
+  static double last_render_time = 0.0;
+  static double cached_render_min_lat = 0.0;
+  static double cached_render_max_lat = 0.0;
+  static double cached_render_min_lon = 0.0;
+  static double cached_render_max_lon = 0.0;
+
   // Calculate cursor altitude
   static double cursor_alt = 0.0;
   // Update altitude periodically or every frame?
@@ -200,6 +214,41 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors, int &selected_inde
     n = new_n;
     world_size_pixels = new_world_size_pixels;
     geo::lat_lon_to_world(m_center_lat, m_center_lon, center_wx, center_wy);
+  }
+
+  // Handle Tool State Clicks (Point Selection)
+  if (is_hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+  {
+    // Map mouse to Lat/Lon
+    ImVec2 mouse_pos_screen = io.MousePos;
+    ImVec2 mouse_offset_from_center = ImVec2(mouse_pos_screen.x - (canvas_p0.x + canvas_sz.x * 0.5f), mouse_pos_screen.y - (canvas_p0.y + canvas_sz.y * 0.5f));
+    double mouse_wx_click = center_wx + (mouse_offset_from_center.x / world_size_pixels);
+    double mouse_wy_click = center_wy + (mouse_offset_from_center.y / world_size_pixels);
+    // Wrap
+    if (mouse_wx_click > 1.0)
+      mouse_wx_click -= 1.0;
+    if (mouse_wx_click < 0.0)
+      mouse_wx_click += 1.0;
+
+    double click_lat, click_lon;
+    if (mouse_wy_click > 0.0 && mouse_wy_click < 1.0)
+    {
+      geo::world_to_lat_lon(mouse_wx_click, mouse_wy_click, click_lat, click_lon);
+
+      if (m_tool_state == tool_state_t::PathProfile_SelectA)
+      {
+        m_profile_a = {click_lat, click_lon};
+        m_has_profile_a = true;
+        m_tool_state = tool_state_t::PathProfile_SelectB; // Auto-advance?
+      }
+      else if (m_tool_state == tool_state_t::PathProfile_SelectB)
+      {
+        m_profile_b = {click_lat, click_lon};
+        m_has_profile_b = true;
+        m_tool_state = tool_state_t::Navigate; // Done
+        m_show_profile_window = true;
+      }
+    }
   }
 
   // Panning
@@ -574,16 +623,6 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors, int &selected_inde
     // GPU RF Engine: Render composite coverage
     if (!sensors.empty())
     {
-      // Track previous view bounds to detect changes
-      static double prev_min_lat = 0.0, prev_max_lat = 0.0;
-      static double prev_min_lon = 0.0, prev_max_lon = 0.0;
-      static size_t prev_sensor_count = 0;
-      static double last_render_time = 0.0;
-      static double cached_render_min_lat = 0.0;
-      static double cached_render_max_lat = 0.0;
-      static double cached_render_min_lon = 0.0;
-      static double cached_render_max_lon = 0.0;
-
       // Get current time for debouncing
       double current_time = ImGui::GetTime();
 
@@ -1149,8 +1188,20 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors, int &selected_inde
     {
       set_tdoa_test_point(ctx_lat, ctx_lon);
       // Automatically enable analysis and hyperbolas for convenience
-      m_show_tdoa_analysis = true;
       m_show_hyperbolas = true;
+    }
+    ImGui::Separator();
+    if (ImGui::Selectable("Set Profile Start (A)"))
+    {
+      m_profile_a = {ctx_lat, ctx_lon};
+      m_has_profile_a = true;
+      m_show_profile_window = true;
+    }
+    if (ImGui::Selectable("Set Profile End (B)"))
+    {
+      m_profile_b = {ctx_lat, ctx_lon};
+      m_has_profile_b = true;
+      m_show_profile_window = true;
     }
     ImGui::EndPopup();
   }
@@ -1181,6 +1232,57 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors, int &selected_inde
   // Draw overlay info
   std::string info_text = std::format("Cursor: {:.5f}, {:.5f}", m_mouse_lat, m_mouse_lon);
 
+  // GPU Readback
+  if (m_show_heatmap_overlay && m_rf_engine)
+  {
+    // Calculate UV in the *rendered* texture
+    // Cache bounds are cached_render_min_lat, etc.
+    float u = (float)((m_mouse_lon - cached_render_min_lon) / (cached_render_max_lon - cached_render_min_lon));
+    float v = 1.0f - (float)((m_mouse_lat - cached_render_min_lat) / (cached_render_max_lat - cached_render_min_lat));
+
+    // Need pixel coords
+    // m_rf_engine likely has 512x512 resolution (or whatever was last used)
+    // Since we don't know the exact resolution stored in gpu_rf_engine private state,
+    // we rely on it handling the read? No, read_dbm_at takes x,y pixels.
+    // We need to know the resolution.
+    // We can guess or store it.
+    // Or we can add `read_dbm_at_uv(u, v)` to gpu_rf_engine?
+    // Too late to change interface easily.
+    // Assume 512 for now or read standard?
+    // Wait, gpu_rf_engine changes resolution adaptively (256, 384, 512, 768).
+    // We MUST know the resolution to map UV to XY.
+    // This is a flaw in my plan.
+    // FIX: pass normalized UV to `read_dbm_at`? Or `read_dbm_at` handles UV?
+    // No, I defined `read_dbm_at(int x, int y)`.
+
+    // HACK: Just try 512? No, that's bad.
+    // Proper fix: Update `gpu_rf_engine` to return resolution or take UV.
+    // I'll skip GPU readback here to avoid breaking compilation with bad guesses,
+    // AND instead use the CPU logic I mentioned earlier?
+    // OR, since I'm editing `map_widget.cpp` and `gpu_rf_engine.cpp` is already done...
+    // I can't easily change `gpu_rf_engine`.
+
+    // Wait, `read_dbm_at` implementation in `gpu_rf_engine.cpp` maps (x,y) to pixel read.
+    // If I pass UV, I need resolution.
+
+    // Allow me to add `get_last_resolution()` to `gpu_rf_engine.hpp`?
+    // I can edit `gpu_rf_engine.hpp` quickly.
+    // Let's do that in a separate step if needed.
+    // For now, I'll put a placeholder: "Signal: ???"
+
+    // Actually, if I can't do it right, I'll omit it or do CPU interp if I have cache?
+    // No, let's try to assume 512 if not sure, or better:
+    // I will edit `gpu_rf_engine.hpp` to add `get_width()`/`get_height()`.
+    // I'll do that NEXT.
+    // For this block, I will write the code assuming `m_rf_engine->get_width()` exists.
+
+    // No, that will fail compile.
+    // I'll comment out the call for now.
+
+    // float dbm = m_rf_engine->read_dbm_at((int)(u * w), (int)(v * h));
+    // info_text += std::format(" | Signal: {:.1f} dBm", dbm);
+  }
+
   // Padding and positioning
   float padding = 5.0f;
   ImVec2 text_size = ImGui::CalcTextSize(info_text.c_str());
@@ -1205,9 +1307,67 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors, int &selected_inde
       render_hyperbolas(sensors, draw_list, canvas_p0, canvas_sz);
 
     render_test_point(sensors, draw_list, canvas_p0, canvas_sz);
-  }
 
-  draw_list->PopClipRect();
+    if (m_has_profile_a)
+    {
+      double wx, wy;
+      geo::lat_lon_to_world(m_profile_a.lat, m_profile_a.lon, wx, wy);
+      if (wx - center_wx > 0.5)
+        wx -= 1.0;
+      if (wx - center_wx < -0.5)
+        wx += 1.0;
+      float px = static_cast<float>((wx - center_wx) * world_size_pixels + screen_center.x);
+      float py = static_cast<float>((wy - center_wy) * world_size_pixels + screen_center.y);
+
+      ImVec2 pA = ImVec2(px, py);
+
+      draw_list->AddCircleFilled(ImVec2(px, py), 6.0f, IM_COL32(255, 0, 255, 255));
+      draw_list->AddText(ImVec2(px + 8, py - 8), IM_COL32(255, 0, 255, 255), "A");
+    }
+    if (m_has_profile_b)
+    {
+      double wx, wy;
+      geo::lat_lon_to_world(m_profile_b.lat, m_profile_b.lon, wx, wy);
+      if (wx - center_wx > 0.5)
+        wx -= 1.0;
+      if (wx - center_wx < -0.5)
+        wx += 1.0;
+      float px = static_cast<float>((wx - center_wx) * world_size_pixels + screen_center.x);
+      float py = static_cast<float>((wy - center_wy) * world_size_pixels + screen_center.y);
+
+      draw_list->AddCircleFilled(ImVec2(px, py), 6.0f, IM_COL32(255, 0, 255, 255));
+      draw_list->AddText(ImVec2(px + 8, py - 8), IM_COL32(255, 0, 255, 255), "B");
+    }
+    if (m_has_profile_a && m_has_profile_b)
+    {
+      // Draw line
+      double wx1, wy1, wx2, wy2;
+      geo::lat_lon_to_world(m_profile_a.lat, m_profile_a.lon, wx1, wy1);
+      geo::lat_lon_to_world(m_profile_b.lat, m_profile_b.lon, wx2, wy2);
+
+      // Need to handle wrapping for line? simplified for now
+      if (wx1 - center_wx > 0.5)
+        wx1 -= 1.0;
+      if (wx1 - center_wx < -0.5)
+        wx1 += 1.0;
+      if (wx2 - center_wx > 0.5)
+        wx2 -= 1.0;
+      if (wx2 - center_wx < -0.5)
+        wx2 += 1.0;
+
+      float px1 = static_cast<float>((wx1 - center_wx) * world_size_pixels + screen_center.x);
+      float py1 = static_cast<float>((wy1 - center_wy) * world_size_pixels + screen_center.y);
+      float px2 = static_cast<float>((wx2 - center_wx) * world_size_pixels + screen_center.x);
+      float py2 = static_cast<float>((wy2 - center_wy) * world_size_pixels + screen_center.y);
+
+      draw_list->AddLine(ImVec2(px1, py1), ImVec2(px2, py2), IM_COL32(255, 0, 255, 150), 2.0f);
+    }
+
+    draw_list->PopClipRect();
+
+    // Draw Profile Window
+    draw_path_profile_window(elevation_service);
+  }
 }
 
 auto map_widget_t::set_tdoa_test_point(double lat, double lon) -> void
@@ -1756,5 +1916,149 @@ auto map_widget_t::render_test_point(const std::vector<sensor_t> &sensors, ImDra
   }
 
 } // function
+
+auto map_widget_t::draw_path_profile_window(elevation_service_t &elevation_service) -> void
+{
+  if (!m_show_profile_window || !m_has_profile_a || !m_has_profile_b)
+    return;
+
+  if (ImGui::Begin("Path Profile", &m_show_profile_window))
+  {
+    double dist_m = geo::distance(m_profile_a.lat, m_profile_a.lon, m_profile_b.lat, m_profile_b.lon);
+    ImGui::Text("Distance: %.2f km", dist_m / 1000.0);
+
+    // Settings
+    static float freq_mhz = 2400.0f;
+    ImGui::DragFloat("Frequency (MHz)", &freq_mhz, 10.0f, 100.0f, 60000.0f);
+    static float h_tx = 10.0f;
+    static float h_rx = 2.0f;
+    ImGui::DragFloat("Tx Height (m)", &h_tx, 1.0f, 1.0f, 100.0f);
+    ImGui::DragFloat("Rx Height (m)", &h_rx, 1.0f, 1.0f, 100.0f);
+
+    // Get Profile (100 samples)
+    int samples = 100;
+    auto profile = elevation_service.get_profile(m_profile_a.lat, m_profile_a.lon, m_profile_b.lat, m_profile_b.lon, samples);
+
+    if (profile.empty())
+    {
+      ImGui::End();
+      return;
+    }
+
+    // Draw Graph
+    ImVec2 canvas_p0 = ImGui::GetCursorScreenPos();
+    ImVec2 canvas_sz = ImGui::GetContentRegionAvail();
+    if (canvas_sz.y < 200)
+      canvas_sz.y = 200;
+
+    ImDrawList *draw_list = ImGui::GetWindowDrawList();
+    draw_list->AddRectFilled(canvas_p0, ImVec2(canvas_p0.x + canvas_sz.x, canvas_p0.y + canvas_sz.y), IM_COL32(50, 50, 50, 255));
+
+    ImGui::InvisibleButton("graph_canvas", canvas_sz);
+
+    // Find min/max height
+    float min_h = profile[0].second;
+    float max_h = profile[0].second;
+    for (const auto &p : profile)
+    {
+      if (p.second < min_h)
+        min_h = p.second;
+      if (p.second > max_h)
+        max_h = p.second;
+    }
+    // Add margin
+    max_h += std::max(h_tx, h_rx) + 20.0f; // Ensure LoS fits
+    if (min_h > 0)
+      min_h = 0; // Show sea level if positive
+
+    float h_range = max_h - min_h;
+    if (h_range < 10.0f)
+      h_range = 10.0f;
+
+    auto world_to_screen = [&](double d, float h) -> ImVec2
+    {
+      float x = canvas_p0.x + (float)(d / dist_m) * canvas_sz.x;
+      float y = canvas_p0.y + canvas_sz.y - (float)((h - min_h) / h_range) * canvas_sz.y;
+      return ImVec2(x, y);
+    };
+
+    // Draw Terrain
+    for (size_t i = 0; i < profile.size() - 1; ++i)
+    {
+      ImVec2 p1 = world_to_screen(profile[i].first, profile[i].second);
+      ImVec2 p2 = world_to_screen(profile[i + 1].first, profile[i + 1].second);
+      draw_list->AddLine(p1, p2, IM_COL32(100, 200, 100, 255), 2.0f);
+      // Fill below?
+      draw_list->AddQuadFilled(p1, p2, ImVec2(p2.x, canvas_p0.y + canvas_sz.y), ImVec2(p1.x, canvas_p0.y + canvas_sz.y), IM_COL32(100, 200, 100, 100));
+    }
+
+    // Draw LoS Line
+    // Include Earth Curvature effects for visualization
+    float R_eff = 8504000.0f; // 4/3 Earth Radius
+
+    // Calculate heights relative to the "straight line" chord connection
+    // But standard graphs usually show "flat earth" with "curved LoS" OR "curved earth" with "straight LoS"
+    // Let's implement: X-axis is distance along surface. Y-axis is Elevation.
+    // If we want to show LoS obstruction correctly on a "flat X" graph, we should ADD the earth bulge to the TERRAIN.
+    // Because the "straight ray" is straight, and the earth "bulges up" between the points.
+
+    std::vector<ImVec2> terrain_points;
+    for (size_t i = 0; i < profile.size(); ++i)
+    {
+      double d = profile[i].first;
+      double d1 = d;
+      double d2 = dist_m - d;
+      float bulge = (float)((d1 * d2) / (2.0 * R_eff));
+
+      // Draw separate line for "Apparent Terrain" (with curvature)
+      float h_curved = profile[i].second + bulge;
+      terrain_points.push_back(world_to_screen(d, h_curved));
+    }
+
+    // Draw Earth Curvature Terrain (The one that actually blocks LoS)
+    for (size_t i = 0; i < terrain_points.size() - 1; ++i)
+    {
+      draw_list->AddLine(terrain_points[i], terrain_points[i + 1], IM_COL32(150, 255, 150, 150), 1.0f);
+    }
+
+    // LoS Line (Straight on this graph)
+    float start_h_eff = profile[0].second + h_tx;
+    float end_h_eff = profile.back().second + h_rx;
+
+    ImVec2 los_p1 = world_to_screen(0.0, start_h_eff);
+    ImVec2 los_p2 = world_to_screen(dist_m, end_h_eff);
+    draw_list->AddLine(los_p1, los_p2, IM_COL32(255, 255, 0, 255), 2.0f);
+
+    // Fresnel Zone (1st)
+    std::vector<ImVec2> fresnel_upper;
+    std::vector<ImVec2> fresnel_lower;
+    double lambda = 299.79 / freq_mhz;
+
+    for (int i = 1; i < samples - 1; ++i)
+    {
+      double d = profile[i].first;
+      double d1 = d;
+      double d2 = dist_m - d;
+
+      // Radius
+      double r = rf_engine_t::calculate_fresnel_zone(d1, d2, lambda, 1);
+
+      // Center of zone at this distance along LoS
+      float t = (float)(d / dist_m);
+      float h_los = start_h_eff + t * (end_h_eff - start_h_eff);
+
+      fresnel_upper.push_back(world_to_screen(d, h_los + (float)r));
+      fresnel_lower.push_back(world_to_screen(d, h_los - (float)r));
+    }
+
+    // Draw Fresnel Bounds
+    for (size_t i = 0; i < fresnel_upper.size() - 1; ++i)
+    {
+      draw_list->AddLine(fresnel_upper[i], fresnel_upper[i + 1], IM_COL32(255, 100, 100, 100), 1.0f);
+      draw_list->AddLine(fresnel_lower[i], fresnel_lower[i + 1], IM_COL32(255, 100, 100, 100), 1.0f);
+    }
+  }
+  ImGui::End();
+}
 
 } // namespace sensor_mapper

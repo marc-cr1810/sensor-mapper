@@ -135,5 +135,12 @@ inline auto knife_edge_loss(double v) -> double
   return 0.0; // No loss if clearance is sufficient
 }
 
+// Interpolate between two points (t = 0.0 to 1.0)
+inline auto interpolate(double lat1, double lon1, double lat2, double lon2, double t, double &out_lat, double &out_lon) -> void
+{
+  out_lat = lat1 + t * (lat2 - lat1);
+  out_lon = lon1 + t * (lon2 - lon1);
+}
+
 } // namespace geo
 } // namespace sensor_mapper

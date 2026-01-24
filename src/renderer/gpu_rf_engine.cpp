@@ -11,9 +11,9 @@ namespace sensor_mapper
 {
 
 static const char *VERTEX_SHADER = R"(
-#version 130
-in vec2 a_pos;
-in vec2 a_texcoord;
+#version 330 core
+layout(location = 0) in vec2 a_pos;
+layout(location = 1) in vec2 a_texcoord;
 out vec2 v_texcoord;
 void main() {
     v_texcoord = a_texcoord;
@@ -32,6 +32,8 @@ gpu_rf_engine_t::~gpu_rf_engine_t()
     glDeleteFramebuffers(1, &m_fbo);
   if (m_result_texture)
     glDeleteTextures(1, &m_result_texture);
+  if (m_data_texture)
+    glDeleteTextures(1, &m_data_texture);
   if (m_elevation_texture)
     glDeleteTextures(1, &m_elevation_texture);
   if (m_antenna_pattern_texture)
@@ -84,14 +86,27 @@ void gpu_rf_engine_t::resize_fbo(int width, int height)
     glGenFramebuffers(1, &m_fbo);
   glBindFramebuffer(GL_FRAMEBUFFER, m_fbo);
 
+  // Attachment 0: Color (Visualization)
   if (m_result_texture == 0)
     glGenTextures(1, &m_result_texture);
   glBindTexture(GL_TEXTURE_2D, m_result_texture);
   glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
   glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
-
   glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, m_result_texture, 0);
+
+  // Attachment 1: Data (Signal dBm, R32F)
+  if (m_data_texture == 0)
+    glGenTextures(1, &m_data_texture);
+  glBindTexture(GL_TEXTURE_2D, m_data_texture);
+  glTexImage2D(GL_TEXTURE_2D, 0, GL_R32F, width, height, 0, GL_RED, GL_FLOAT, nullptr);
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST); // Nearest because it's data
+  glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+  glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D, m_data_texture, 0);
+
+  // Set Draw Buffers
+  GLenum buffers[] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1};
+  glDrawBuffers(2, buffers);
 
   if (glCheckFramebufferStatus(GL_FRAMEBUFFER) != GL_FRAMEBUFFER_COMPLETE)
     std::cerr << "GPU RF Engine: Framebuffer not complete!" << std::endl;
@@ -102,7 +117,7 @@ void gpu_rf_engine_t::resize_fbo(int width, int height)
 void gpu_rf_engine_t::update_elevation_texture(elevation_service_t *service, const building_service_t *building_service, double min_lat, double max_lat, double min_lon, double max_lon)
 {
   // Use lower resolution for elevation texture to reduce memory and sampling cost
-  int w = 256; // Increased from 128 for better building resolution
+  int w = 256;
   int h = 256;
 
   std::vector<float> data(w * h, 0.0f);
@@ -126,82 +141,14 @@ void gpu_rf_engine_t::update_elevation_texture(elevation_service_t *service, con
     }
   }
 
-  // 2. Rasterize Buildings (Additive or max? Additive usually (terrain + building height))
-  // But wait, our rasterizer rasterizes into a grid where 0,0 is (min_lon, min_lat)
-  // This matches our loop above (y=0 is min_lat, x=0 is min_lon)
+  // 2. Rasterize Buildings
   if (building_service)
   {
     auto buildings = building_service->get_buildings_in_area(min_lat, max_lat, min_lon, max_lon);
     rasterize_buildings(data, w, h, min_lat, max_lat, min_lon, max_lon, buildings, true); // add_mode = true
   }
 
-  // 3. Flip Y for OpenGL Upload (0,0 in OpenGL is Bottom-Left, but image data usually Top-Left?
-  // Wait, OpenGL Texture: (0,0) is bottom-left.
-  // Our loop: y=0 is min_lat (South), y=h-1 is max_lat (North).
-  // So data[0] is South-West corner.
-  // Standard glTexImage2D expects data starting from Bottom-Row (0,0) up to Top-Row.
-  // So if data[0] is South (Bottom), we DON'T need to flip if we match UVs correctly.
-
-  // Checking shader:
-  // v_texcoord = (0,0) at bottom-left?
-  // Shader uses v_texcoord directly.
-
-  // Checking previous code:
-  // int flipped_y = (h - 1) - y;
-  // This suggests the previous code assumed data[0] was Top-Left (North)?
-  // Let's look at the previous loop:
-  // y=0 -> t=0 -> lat = min_lat (South).
-  // data[flipped_y] = elev.
-  // So data[h-1] (Last Row) got South data.
-  // data[0] (First Row) got North data.
-  // OpenGL uploads First Row to Bottom.
-  // So Bottom of Texture = North Data.
-  // Top of Texture = South Data.
-  // This seems INVERTED if V=0 is Bottom.
-
-  // Let's stick to standard map coords: V=0 is South, V=1 is North.
-  // If we upload South data first (index 0), then it goes to V=0 (Bottom).
-  // So we should NOT flip if we want V=0=South.
-
-  // HOWEVER, let's respect the previous convention if the shader expects it.
-  // Previous code FLIPPED.
-  // y=0 (South) went to flipped_y=Max (Top of memory).
-  // Memory: [Top/South ... Bottom/North]
-  // Upload: Bottom of Texture gets Top of Memory (South).
-  // So V=0 at Bottom gets South.
-  // So PREVIOUS CODE put South at V=0.
-
-  // My loop above puts y=0 (South) at index 0.
-  // If I upload index 0, it goes to V=0 (Bottom).
-  // So if I DON'T flip, V=0 is South.
-  // This matches!
-
-  // Wait, let's re-read previous code carefully.
-  // int flipped_y = (h - 1) - y;
-  // data[flipped_y * w + x] = elev;
-  // y=0 (South) -> flipped_y = 127 (Last Index).
-  // data[Last] = South.
-  // Buffer: [ ... South ]
-  // glTexImage2D reads array from 0..N.
-  // 0 goes to Bottom row. Last goes to Top row.
-  // So Bottom Row gets data[0] (North).
-  // Top Row gets data[Last] (South).
-  // So V=0 is North, V=1 is South.
-  //
-  // In Shader:
-  // float v = 1.0f - (float)((s.get_latitude() - min_lat) / (max_lat - min_lat));
-  // Latitude: Min(South) -> Max(North).
-  // (lat - min) / range: 0(South) .. 1(North).
-  // v = 1.0 - (0..1) = 1(South) .. 0(North).
-  // So Shader expects V=1 to be South, V=0 to be North.
-  //
-  // So previous code produced V=1 (Top) = South.
-  // Correct.
-
-  // So I need to ensure my buffer has South at the End (High Index).
-  // My loop: y=0 (South) -> index 0.
-  // So I need to flip it to match existing shader logic.
-
+  // 3. Flip Y for OpenGL Upload
   std::vector<float> flipped_data(w * h);
   for (int y = 0; y < h; ++y)
   {
@@ -223,10 +170,12 @@ auto gpu_rf_engine_t::render(const std::vector<sensor_t> &sensors, elevation_ser
   if (!m_shader)
   {
     const char *FRAG_SRC = R"(
-#version 130
+#version 330 core
 precision mediump float;
 
-out vec4 FragColor;
+layout(location = 0) out vec4 FragColor;
+layout(location = 1) out float FragData;
+
 in vec2 v_texcoord;
 
 uniform sampler2D u_elevation_tex;
@@ -275,6 +224,32 @@ float calculate_hata(float d_km, float f_mhz, float h_tx, float h_rx) {
    return 69.55 + 26.16*log_f - 13.82*log_h - a_h_rx + (44.9 - 6.55*log_h)*log_d;
 }
 
+// Turbo Colormap (Copyright 2019 Google LLC. Apache License 2.0)
+float turbo_r(float x) {
+    const vec4 kRedVec4 = vec4(0.13572138, 4.61539260, -42.66032258, 132.13108234);
+    const vec2 kRedVec2 = vec2(-152.94239396, 59.28637943);
+    x = clamp(x, 0.0, 1.0);
+    vec4 v4 = vec4(1.0, x, x * x, x * x * x);
+    vec2 v2 = v4.zw * v4.z; // x^4, x^5
+    return dot(v4, kRedVec4) + dot(v2, kRedVec2);
+}
+float turbo_g(float x) {
+    const vec4 kGreenVec4 = vec4(0.09140261, 2.19418839, 4.84296658, -14.18503333);
+    const vec2 kGreenVec2 = vec2(4.27729857, 2.82956604);
+    x = clamp(x, 0.0, 1.0);
+    vec4 v4 = vec4(1.0, x, x * x, x * x * x);
+    vec2 v2 = v4.zw * v4.z;
+    return dot(v4, kGreenVec4) + dot(v2, kGreenVec2);
+}
+float turbo_b(float x) {
+    const vec4 kBlueVec4 = vec4(0.10667330, 12.64194608, -60.58204836, 110.36276771);
+    const vec2 kBlueVec2 = vec2(-89.90310912, 27.34824973);
+    x = clamp(x, 0.0, 1.0);
+    vec4 v4 = vec4(1.0, x, x * x, x * x * x);
+    vec2 v2 = v4.zw * v4.z;
+    return dot(v4, kBlueVec4) + dot(v2, kBlueVec2);
+}
+
 void main() {
     float my_elev = get_elevation(v_texcoord);
     float h_rx = 2.0 + my_elev;
@@ -284,7 +259,6 @@ void main() {
     for(int i=0; i<MAX_SENSORS; ++i) {
         if (i >= u_sensor_count) break;
         
-        // Early termination: if we already have excellent signal, skip remaining sensors
         if (max_dbm >= -50.0) break;
 
         vec2 s_uv = u_sensor_pos_range[i].xy;
@@ -307,22 +281,18 @@ void main() {
 
         float angle_rad = atan(diff_m.y, diff_m.x);
         float angle_deg = degrees(angle_rad);
-        // Convert from math angle (0=East, CCW) to geographic bearing (0=North, CW)
         angle_deg = 90.0 - angle_deg;
         if (angle_deg < 0.0) angle_deg += 360.0;
 
-        // Antenna Pattern - sample from texture
         float rel_angle = angle_deg - azi;
         if (rel_angle < 0.0) rel_angle += 360.0;
         if (rel_angle >= 360.0) rel_angle -= 360.0;
         
-        // Sample antenna pattern texture (360 degrees x sensors)
         float pattern_u = rel_angle / 360.0;
-        float pattern_v = (float(i) + 0.5) / 32.0; // 32 = m_max_pattern_sensors
+        float pattern_v = (float(i) + 0.5) / 32.0; 
         float pattern_gain = texture(u_antenna_pattern_tex, vec2(pattern_u, pattern_v)).r;
-        float pattern_loss = -pattern_gain; // Convert gain to loss
+        float pattern_loss = -pattern_gain; 
         
-        // Quick path loss estimation for early culling
         float d_km = dist_m / 1000.0;
         float quick_loss = 0.0;
         float h_tx = mast + ground;
@@ -332,103 +302,54 @@ void main() {
             quick_loss = calculate_hata(d_km, freq, h_tx, 2.0);
         }
         
-        // Skip expensive raymarching if signal would be too weak anyway
-        float estimated_rx = tx_pwr + gain - quick_loss - pattern_loss - 10.0; // -10dB margin for terrain
-        if (estimated_rx < u_min_signal_dbm - 20.0) continue; // Skip if way below threshold
+        float estimated_rx = tx_pwr + gain - quick_loss - pattern_loss - 10.0; 
+        if (estimated_rx < u_min_signal_dbm - 20.0) continue; 
 
-        // LOS Check with Earth Curvature and Fresnel Diffraction
         float diffraction_loss = 0.0;
-        
-        // Accurate distance and steps
         float dist_km = dist_m / 1000.0;
-        
-        // Earth Radius radius (4/3 Effective)
         float R_eff = 6378137.0 * 1.333333;
-        
-        // Raymarching for Obstruction
-        // Minimum steps for accuracy, but limit for performance
         int steps = int(clamp(dist_m / 50.0, 20.0, 100.0));
         float step_increment = 1.0 / float(steps);
-        
         float max_v = -10.0;
         
         for(int s=1; s<steps; ++s) {
             float t = float(s) * step_increment;
-            
-            // Texture lookup for terrain height
             vec2 p_uv = s_uv + diff * t;
             float p_h = texture(u_elevation_tex, p_uv).r;
-            
-            // Distances
             float d1 = dist_m * t;
             float d2 = dist_m * (1.0 - t);
-            
-            // Linear Line of Sight Height (Straight line between TX and RX)
             float h_los = h_tx + t * (h_rx - h_tx);
-            
-            // Earth Curvature "Bulge" at this point (relative to straight chord)
-            // h = (d1 * d2) / (2 * R_eff)
             float bulge = (d1 * d2) / (2.0 * R_eff);
-            
-            // Effective Obstacle Height
             float h_obs = p_h + bulge;
-            
-            // Clearance (Ray - Obstacle)
             float clearance = h_los - h_obs;
-            
-            // Fresnel Parameter v
-            // lambda = c / f
             float lambda = 299.79 / freq;
             float v = -clearance * sqrt( (2.0 * (d1+d2)) / (lambda * d1 * d2) );
-            
-            if (v > max_v) {
-                max_v = v;
-            }
+            if (v > max_v) max_v = v;
         }
         
-        // Calculate Knife-Edge Loss from max_v
-        // J(v) = 6.9 + 20 * log10(sqrt(v^2 + 1) + v)   for v > -0.7
         if (max_v > -0.7) {
             diffraction_loss = 6.9 + 20.0 * log(sqrt(max_v*max_v + 1.0) + max_v) / log(10.0);
         }
 
-        // Use the path loss we already calculated
         float rx = tx_pwr + gain - quick_loss - pattern_loss - diffraction_loss;
         max_dbm = max(max_dbm, rx);
     }
     
-    // Visualization
+    // Output Data
+    FragData = max_dbm;
+
+    // Output Visualization
     vec4 col = vec4(0.0);
     if (max_dbm > u_min_signal_dbm) {
-        // Simple heatmap gradient
-        float val = (max_dbm - u_min_signal_dbm) / 100.0; // Dynamic range ~100dB
+        float val = (max_dbm - u_min_signal_dbm) / 100.0;
         val = clamp(val, 0.0, 1.0);
         
-        // Turbo-like colormap approximation
-        // R
-        float r = 0.0;
-        if (val > 0.5) r = (val - 0.5) * 2.0;
-        if (val > 0.8) r = 0.6 + (val - 0.8) * 2.0; // Push to yellow/white
-        
-        // G
-        float g = 0.0;
-        if (val < 0.5) g = val * 2.0;
-        else g = 1.0 - (val - 0.5);
-        
-        // B
-        float b = 0.0;
-        if (val < 0.3) b = 1.0 - val * 3.33;
-        
-        // Alpha based on signal strength
+        float r = turbo_r(val);
+        float g = turbo_g(val);
+        float b = turbo_b(val);
         float a = 0.4 + val * 0.6;
         
         col = vec4(r, g, b, a);
-        
-        // Hard threshold colors (optional, replacing with smooth gradient above)
-         if (max_dbm >= -60.0) col = vec4(0.0, 1.0, 0.0, 0.8);
-         else if (max_dbm >= -80.0) col = mix(vec4(1.0, 1.0, 0.0, 0.7), vec4(0.0, 1.0, 0.0, 0.8), (max_dbm+80.0)/20.0);
-         else if (max_dbm >= -100.0) col = mix(vec4(1.0, 0.0, 0.0, 0.5), vec4(1.0, 1.0, 0.0, 0.7), (max_dbm+100.0)/20.0);
-         else col = vec4(1.0, 0.0, 0.0, max(0.0, (max_dbm+120.0)/20.0)*0.5);
     }
     FragColor = col;
 }
@@ -436,51 +357,36 @@ void main() {
     m_shader = std::make_unique<shader_t>(VERTEX_SHADER, FRAG_SRC);
   }
 
-  // Adaptive resolution based on viewport size
-  // Reduce resolution for larger areas to improve performance
+  // Adaptive resolution
   double area_deg = (max_lat - min_lat) * (max_lon - min_lon);
   int resolution = 512;
-
   if (area_deg > 1.0)
-  {
-    resolution = 256; // Large area - use lower resolution
-  }
+    resolution = 256;
   else if (area_deg > 0.1)
-  {
-    resolution = 384; // Medium area
-  }
+    resolution = 384;
   else if (area_deg < 0.01)
-  {
-    resolution = 768; // Very zoomed in - use higher resolution
-  }
+    resolution = 768;
 
   resize_fbo(resolution, resolution);
   update_elevation_texture(service, building_service, min_lat, max_lat, min_lon, max_lon);
 
-  // Setup Uniforms
   m_shader->bind();
 
   double mid_lat = (min_lat + max_lat) * 0.5;
   double height_m = (max_lat - min_lat) * 111000.0;
   double width_m = (max_lon - min_lon) * 111000.0 * std::cos(mid_lat * 3.14159 / 180.0);
   m_shader->set_vec2("u_bounds_meters", (float)width_m, (float)height_m);
-  m_shader->set_float("u_min_signal_dbm", min_signal_dbm); // User-adjustable minimum signal threshold
+  m_shader->set_float("u_min_signal_dbm", min_signal_dbm);
 
-  // Upload Sensors - Sort by power for better early termination
-  // Create indices sorted by transmit power (strongest first)
   std::vector<size_t> sensor_indices(sensors.size());
   for (size_t i = 0; i < sensors.size(); ++i)
-  {
     sensor_indices[i] = i;
-  }
-
-  // Sort indices by transmit power + gain (descending)
   std::sort(sensor_indices.begin(), sensor_indices.end(),
             [&sensors](size_t a, size_t b)
             {
               double power_a = sensors[a].get_tx_power_dbm() + sensors[a].get_tx_antenna_gain_dbi();
               double power_b = sensors[b].get_tx_power_dbm() + sensors[b].get_tx_antenna_gain_dbi();
-              return power_a > power_b; // Strongest first
+              return power_a > power_b;
             });
 
   int count = 0;
@@ -492,28 +398,22 @@ void main() {
   {
     if (count >= 32)
       break;
-
     const auto &s = sensors[idx];
-
     float u = (float)((s.get_longitude() - min_lon) / (max_lon - min_lon));
-    float v = 1.0f - (float)((s.get_latitude() - min_lat) / (max_lat - min_lat)); // Flip V for OpenGL
-    float range_m = (float)s.get_range();                                         // Pass range in meters
-
+    float v = 1.0f - (float)((s.get_latitude() - min_lat) / (max_lat - min_lat));
+    float range_m = (float)s.get_range();
     u_pos_range.push_back(u);
     u_pos_range.push_back(v);
     u_pos_range.push_back(range_m);
     u_pos_range.push_back(0.0f);
-
     u_p1.push_back((float)s.get_tx_power_dbm());
     u_p1.push_back((float)s.get_frequency_mhz());
     u_p1.push_back((float)s.get_azimuth_deg());
     u_p1.push_back((float)s.get_beamwidth_deg());
-
     u_p2.push_back((float)s.get_tx_antenna_gain_dbi());
     u_p2.push_back((float)s.get_mast_height());
     u_p2.push_back((float)s.get_ground_elevation());
     u_p2.push_back((float)s.get_propagation_model());
-
     count++;
   }
 
@@ -525,10 +425,8 @@ void main() {
     m_shader->set_vec4_array("u_sensor_params_2", count, u_p2.data());
   }
 
-  // Update antenna patterns
   update_antenna_pattern_texture(sensors);
 
-  // Bind Elevation
   glActiveTexture(GL_TEXTURE1);
   glBindTexture(GL_TEXTURE_2D, m_elevation_texture);
   m_shader->set_int("u_elevation_tex", 1);
@@ -537,11 +435,18 @@ void main() {
   glBindTexture(GL_TEXTURE_2D, m_antenna_pattern_texture);
   m_shader->set_int("u_antenna_pattern_tex", 2);
 
-  // Draw to FBO
   glBindFramebuffer(GL_FRAMEBUFFER, m_fbo);
   glViewport(0, 0, m_fbo_width, m_fbo_height);
+
+  // Clear both targets manually if needed, or just clear buffer bit
+  GLenum draw_buffers[] = {GL_COLOR_ATTACHMENT0, GL_COLOR_ATTACHMENT1};
+  glDrawBuffers(2, draw_buffers);
+
   glClearColor(0, 0, 0, 0);
-  glClear(GL_COLOR_BUFFER_BIT);
+  // Clear Data to -200 (noise)
+  float noise[] = {-200.0f, -200.0f, -200.0f, -200.0f};
+  glClearBufferfv(GL_COLOR, 1, noise);
+  glClear(GL_COLOR_BUFFER_BIT); // Clears Attachment 0 with clear color
 
   glBindVertexArray(m_quad_vao);
   glDrawArrays(GL_TRIANGLE_FAN, 0, 4);
@@ -555,7 +460,6 @@ void main() {
 
 void gpu_rf_engine_t::update_antenna_pattern_texture(const std::vector<sensor_t> &sensors)
 {
-  // Create texture if it doesn't exist
   if (m_antenna_pattern_texture == 0)
   {
     glGenTextures(1, &m_antenna_pattern_texture);
@@ -566,33 +470,36 @@ void gpu_rf_engine_t::update_antenna_pattern_texture(const std::vector<sensor_t>
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
   }
 
-  // Build pattern data: 360 degrees x m_max_pattern_sensors
-  // Each texel stores the gain in dB (as a float)
   std::vector<float> pattern_data(360 * m_max_pattern_sensors, 0.0f);
-
   int num_sensors = std::min((int)sensors.size(), m_max_pattern_sensors);
 
   for (int i = 0; i < num_sensors; ++i)
   {
     const auto &sensor = sensors[i];
-    auto pattern = sensor.get_pattern();
-
-    // Sample antenna pattern at each degree
-    float min_gain = 0.0f, max_gain = 0.0f;
     for (int angle = 0; angle < 360; ++angle)
     {
       float gain_db = static_cast<float>(sensor.get_antenna_gain(static_cast<double>(angle)));
       pattern_data[i * 360 + angle] = gain_db;
-      if (angle == 0 || gain_db < min_gain)
-        min_gain = gain_db;
-      if (angle == 0 || gain_db > max_gain)
-        max_gain = gain_db;
     }
   }
 
-  // Upload to GPU
   glBindTexture(GL_TEXTURE_2D, m_antenna_pattern_texture);
   glTexImage2D(GL_TEXTURE_2D, 0, GL_R32F, 360, m_max_pattern_sensors, 0, GL_RED, GL_FLOAT, pattern_data.data());
+}
+
+auto gpu_rf_engine_t::read_dbm_at(int x, int y) -> float
+{
+  if (m_fbo == 0)
+    return -200.0f;
+
+  glBindFramebuffer(GL_FRAMEBUFFER, m_fbo);
+  glReadBuffer(GL_COLOR_ATTACHMENT1);
+
+  float dbm = -200.0f;
+  glReadPixels(x, y, 1, 1, GL_RED, GL_FLOAT, &dbm);
+
+  glBindFramebuffer(GL_FRAMEBUFFER, 0);
+  return dbm;
 }
 
 } // namespace sensor_mapper

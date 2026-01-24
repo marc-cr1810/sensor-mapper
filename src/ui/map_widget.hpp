@@ -2,6 +2,7 @@
 
 #include "core/building_service.hpp"
 #include "core/elevation_service.hpp"
+#include "core/geo_math.hpp"
 #include "core/sensor.hpp"
 #include "core/tdoa_solver.hpp"
 #include "core/tile_service.hpp"
@@ -156,6 +157,32 @@ public:
     m_timing_jitter_ns = jitter;
   }
 
+  // Tool State
+  enum class tool_state_t
+  {
+    Navigate,
+    PathProfile_SelectA,
+    PathProfile_SelectB
+  };
+
+  auto get_tool_state() const -> tool_state_t
+  {
+    return m_tool_state;
+  }
+  auto set_tool_state(tool_state_t state)
+  {
+    m_tool_state = state;
+  }
+
+  auto get_show_profile_window() const -> bool
+  {
+    return m_show_profile_window;
+  }
+  auto set_show_profile_window(bool show)
+  {
+    m_show_profile_window = show;
+  }
+
 private:
   double m_center_lat;
   double m_center_lon;
@@ -163,6 +190,16 @@ private:
 
   double m_mouse_lat = 0.0;
   double m_mouse_lon = 0.0;
+
+  // Tool State
+  tool_state_t m_tool_state = tool_state_t::Navigate;
+
+  // Path Profile State
+  bool m_show_profile_window = false;
+  geo_point_t m_profile_a = {0.0, 0.0};
+  bool m_has_profile_a = false;
+  geo_point_t m_profile_b = {0.0, 0.0};
+  bool m_has_profile_b = false;
 
   bool m_show_rf_gradient; // Show RF signal strength gradient (default: off)
   bool m_show_composite = false;
@@ -210,6 +247,8 @@ private:
   auto render_gdop_contours(const std::vector<sensor_t> &sensors, ImDrawList *draw_list, const ImVec2 &canvas_p0, const ImVec2 &canvas_sz) -> void;
   auto render_accuracy_heatmap(const std::vector<sensor_t> &sensors, ImDrawList *draw_list, const ImVec2 &canvas_p0, const ImVec2 &canvas_sz) -> void;
   auto render_test_point(const std::vector<sensor_t> &sensors, ImDrawList *draw_list, const ImVec2 &canvas_p0, const ImVec2 &canvas_sz) -> void;
+
+  auto draw_path_profile_window(elevation_service_t &elevation_service) -> void;
 };
 
 } // namespace sensor_mapper

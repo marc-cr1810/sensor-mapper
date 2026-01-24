@@ -25,6 +25,9 @@ public:
   auto render(const std::vector<sensor_t> &sensors, elevation_service_t *elevation_service, const building_service_t *building_service, double min_lat, double max_lat, double min_lon, double max_lon,
               float min_signal_dbm = -90.0f) -> unsigned int; // returns Texture ID
 
+  // Read back signal strength (dBm) at a specific pixel coordinate (0,0 is bottom-left)
+  auto read_dbm_at(int x, int y) -> float;
+
 private:
   std::unique_ptr<shader_t> m_shader;
 
@@ -41,6 +44,8 @@ private:
 
   // Texture for uploading Antenna Pattern Data (360 degrees x max_sensors)
   unsigned int m_antenna_pattern_texture = 0;
+  // Texture for Data Readback (R32F)
+  unsigned int m_data_texture = 0;
   int m_max_pattern_sensors = 32; // Maximum sensors we can handle patterns for
 
   // Fullscreen Quad
