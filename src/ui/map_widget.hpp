@@ -60,6 +60,7 @@ public:
   auto set_show_composite(bool show) -> void
   {
     m_show_composite = show;
+    m_heatmap_dirty = true;
   }
 
   auto get_show_buildings() const -> bool
@@ -96,6 +97,7 @@ public:
   auto set_show_heatmap_overlay(bool show) -> void
   {
     m_show_heatmap_overlay = show;
+    m_heatmap_dirty = true;
   }
 
   auto get_min_signal_dbm() const -> float

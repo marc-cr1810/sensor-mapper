@@ -172,6 +172,8 @@ set(SOURCES_UI
   src/ui/map_widget.hpp
   src/ui/texture.cpp
   src/ui/texture.hpp
+  src/ui/app_ui.cpp
+  src/ui/app_ui.hpp
   src/ui/antenna_pattern_ui.hpp
   src/ui/antenna_pattern_3d_viewer.hpp
 )

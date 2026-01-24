@@ -592,7 +592,7 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors, int &selected_inde
     return IM_COL32(r, g, b, a);
   };
 
-  if (m_show_composite)
+  if (m_show_composite || m_show_heatmap_overlay)
   {
     // Composite Grid Rendering (Async Texture)
     // 1. Check if we need to trigger update
@@ -663,7 +663,7 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors, int &selected_inde
       }
 
       // Draw GPU-rendered texture overlay (if enabled)
-      if (m_heatmap_texture_id != 0 && m_show_heatmap_overlay)
+      if (m_heatmap_texture_id != 0 && (m_show_heatmap_overlay || m_show_composite))
       {
         // Calculate UV coordinates to map viewport to the larger rendered area
         float u_min = (float)((min_lon - m_cached_render_min_lon) / (m_cached_render_max_lon - m_cached_render_min_lon));
@@ -857,7 +857,8 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors, int &selected_inde
       }
     }
   }
-  else
+
+  // --- Draw All Sensors (Markers always, Coverage selectively) ---
   {
     // Normal Rendering Loop
     for (size_t idx = 0; idx < sensors.size(); ++idx)
@@ -922,39 +923,33 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors, int &selected_inde
 
       if (cache_it != m_view_cache.end() && cache_it->second.hash_key == current_hash)
       {
-        // Cache Hit!
-        // We still need to convert the cached Screen Points? No, cache should
-        // store Lat/Lon. Wait, the previous code pushed `ImVec2(px, py)`
-        // directly. I need to refactor the raycast loop to produce a list of
-        // Lat/Lon first.
-
-        // Actually, let's store the polygon as a list of "Destination Lat/Lon".
-        // Use the existing cache structure: std::vector<ImVec2> where x=lat,
-        // y=lon.
-        const auto &cached_latlons = cache_it->second.points;
-        points.reserve(cached_latlons.size());
-
-        for (const auto &pt : cached_latlons)
+        if (!m_show_heatmap_overlay)
         {
-          double p_lat = pt.x;
-          double p_lon = pt.y;
-          double p_wx, p_wy;
-          geo::lat_lon_to_world(p_lat, p_lon, p_wx, p_wy);
+          const auto &cached_latlons = cache_it->second.points;
+          points.reserve(cached_latlons.size());
 
-          // Simple Wrap check
-          if (p_wx - center_wx > 0.5)
-            p_wx -= 1.0;
-          if (p_wx - center_wx < -0.5)
-            p_wx += 1.0;
+          for (const auto &pt : cached_latlons)
+          {
+            double p_lat = pt.x;
+            double p_lon = pt.y;
+            double p_wx, p_wy;
+            geo::lat_lon_to_world(p_lat, p_lon, p_wx, p_wy);
 
-          float px = static_cast<float>((p_wx - center_wx) * world_size_pixels + screen_center.x);
-          float py = static_cast<float>((p_wy - center_wy) * world_size_pixels + screen_center.y);
-          points.push_back(ImVec2(px, py));
+            // Simple Wrap check
+            if (p_wx - center_wx > 0.5)
+              p_wx -= 1.0;
+            if (p_wx - center_wx < -0.5)
+              p_wx += 1.0;
+
+            float px = static_cast<float>((p_wx - center_wx) * world_size_pixels + screen_center.x);
+            float py = static_cast<float>((p_wy - center_wy) * world_size_pixels + screen_center.y);
+            points.push_back(ImVec2(px, py));
+          }
         }
         cache_valid = true;
       }
 
-      if (!cache_valid)
+      if (!cache_valid && !m_show_heatmap_overlay)
       {
         // Cache Miss - Recalculate
         const int segments = 360; // 1 degree precision
@@ -1179,117 +1174,92 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors, int &selected_inde
 
         // Update Cache
         m_view_cache[s_id] = {current_hash, new_cache_latlons, new_cache_signal_dbm};
+        cache_valid = true;
       }
 
-      // Colors
-      auto col = sensor.get_color();
-      // Range stays green
-      ImU32 fill_col = is_selected ? IM_COL32(0, 255, 0, 100) : IM_COL32(0, 200, 0, 50);
-      ImU32 border_col = is_selected ? IM_COL32(255, 255, 0, 255) : IM_COL32(0, 255, 0, 255);
-      float thickness = is_selected ? 3.0f : 2.0f;
-
-      // Calculate center screen pos (needed for triangle fan)
-      double c_wx, c_wy;
-      geo::lat_lon_to_world(s_lat, s_lon, c_wx, c_wy);
-      if (c_wx - center_wx > 0.5)
-        c_wx -= 1.0;
-      if (c_wx - center_wx < -0.5)
-        c_wx += 1.0;
-
-      float cx = static_cast<float>((c_wx - center_wx) * world_size_pixels + screen_center.x);
-      float cy = static_cast<float>((c_wy - center_wy) * world_size_pixels + screen_center.y);
-
-      // Draw Fill
-      if (!points.empty())
+      // --- Draw Raycast Coverage (Suppress if GPU Heatmap/Composite is active) ---
+      if (!m_show_heatmap_overlay && !m_show_composite)
       {
-        ImVec2 center_pt = ImVec2(cx, cy);
-        ImU32 center_col = is_selected ? IM_COL32(0, 255, 0, 220) : IM_COL32(0, 220, 0, 180);
+        // Colors
+        // Range stays green
+        ImU32 fill_col = is_selected ? IM_COL32(0, 255, 0, 100) : IM_COL32(0, 200, 0, 50);
+        ImU32 border_col = is_selected ? IM_COL32(255, 255, 0, 255) : IM_COL32(0, 255, 0, 255);
+        float thickness = is_selected ? 3.0f : 2.0f;
 
-        if (m_show_rf_gradient && !m_view_cache[s_id].signal_dbm.empty())
+        // Calculate center screen pos (needed for triangle fan)
+        double c_wx, c_wy;
+        geo::lat_lon_to_world(s_lat, s_lon, c_wx, c_wy);
+        if (c_wx - center_wx > 0.5)
+          c_wx -= 1.0;
+        if (c_wx - center_wx < -0.5)
+          c_wx += 1.0;
+
+        float cx_local = static_cast<float>((c_wx - center_wx) * world_size_pixels + screen_center.x);
+        float cy_local = static_cast<float>((c_wy - center_wy) * world_size_pixels + screen_center.y);
+
+        // Draw Fill
+        if (!points.empty())
         {
-          // RF Gradient Mode: Use cached signal strength
-          [[maybe_unused]] auto dbm_to_color = [](double p_rx_dbm) -> ImU32
+          ImVec2 center_pt = ImVec2(cx_local, cy_local);
+          ImU32 center_col = is_selected ? IM_COL32(0, 255, 0, 220) : IM_COL32(0, 220, 0, 180);
+
+          if (m_show_rf_gradient && !m_view_cache[s_id].signal_dbm.empty())
           {
-            int r, g, b, a;
-            if (p_rx_dbm >= -60.0)
-            {
-              r = 0;
-              g = 255;
-              b = 0;
-              a = 200;
-            }
-            else if (p_rx_dbm >= -80.0)
-            {
-              float t = (p_rx_dbm + 80.0) / 20.0;
-              r = static_cast<int>((1.0f - t) * 255);
-              g = 255;
-              b = 0;
-              a = 180;
-            }
-            else if (p_rx_dbm >= -100.0)
-            {
-              float t = (p_rx_dbm + 100.0) / 20.0;
-              r = 255;
-              g = static_cast<int>(t * 255);
-              b = 0;
-              a = 120;
-            }
-            else
-            {
-              float t = std::max(0.0, (p_rx_dbm + 120.0) / 20.0);
-              r = 255;
-              g = 0;
-              b = 0;
-              a = static_cast<int>(t * 80);
-            }
-            return IM_COL32(r, g, b, a);
-          };
+            const ImVec2 uv = ImGui::GetFontTexUvWhitePixel();
+            auto &cached_signal = m_view_cache[s_id].signal_dbm;
 
-          const ImVec2 uv = ImGui::GetFontTexUvWhitePixel();
-          auto &cached_signal = m_view_cache[s_id].signal_dbm;
+            for (size_t i = 0; i < points.size(); ++i)
+            {
+              ImU32 edge_col1 = dbm_to_color_lambda(cached_signal[i]);
+              ImU32 edge_col2 = dbm_to_color_lambda(cached_signal[(i + 1) % points.size()]);
 
-          for (size_t i = 0; i < points.size(); ++i)
+              draw_list->PrimReserve(3, 3);
+              draw_list->PrimWriteVtx(center_pt, uv, center_col);
+              draw_list->PrimWriteVtx(points[i], uv, edge_col1);
+              draw_list->PrimWriteVtx(points[(i + 1) % points.size()], uv, edge_col2);
+              draw_list->PrimWriteIdx((ImDrawIdx)(draw_list->_VtxCurrentIdx - 3));
+              draw_list->PrimWriteIdx((ImDrawIdx)(draw_list->_VtxCurrentIdx - 2));
+              draw_list->PrimWriteIdx((ImDrawIdx)(draw_list->_VtxCurrentIdx - 1));
+            }
+          }
+          else
           {
-            ImU32 edge_col1 = dbm_to_color_lambda(cached_signal[i]);
-            ImU32 edge_col2 = dbm_to_color_lambda(cached_signal[(i + 1) % points.size()]);
-
-            draw_list->PrimReserve(3, 3);
-            draw_list->PrimWriteVtx(center_pt, uv, center_col);
-            draw_list->PrimWriteVtx(points[i], uv, edge_col1);
-            draw_list->PrimWriteVtx(points[(i + 1) % points.size()], uv, edge_col2);
-            draw_list->PrimWriteIdx((ImDrawIdx)(draw_list->_VtxCurrentIdx - 3));
-            draw_list->PrimWriteIdx((ImDrawIdx)(draw_list->_VtxCurrentIdx - 2));
-            draw_list->PrimWriteIdx((ImDrawIdx)(draw_list->_VtxCurrentIdx - 1));
+            // Solid Fill Mode (default)
+            for (size_t i = 0; i < points.size(); ++i)
+            {
+              draw_list->AddTriangleFilled(center_pt, points[i], points[(i + 1) % points.size()], fill_col);
+            }
           }
         }
-        else
-        {
-          // Solid Fill Mode (default)
-          for (size_t i = 0; i < points.size(); ++i)
-          {
-            draw_list->AddTriangleFilled(center_pt, points[i], points[(i + 1) % points.size()], fill_col);
-          }
-        }
+
+        // Draw Border
+        draw_list->AddPolyline(points.data(), (int)points.size(), border_col, true, thickness);
       }
 
-      // Draw Border
-      draw_list->AddPolyline(points.data(), (int)points.size(), border_col, true, thickness);
+      // --- Draw Markers (Always visible) ---
+      auto color_vals = sensor.get_color();
+      ImU32 marker_col = IM_COL32(static_cast<int>(color_vals[0] * 255), static_cast<int>(color_vals[1] * 255), static_cast<int>(color_vals[2] * 255), 255);
+      double c_wx_marker, c_wy_marker;
+      geo::lat_lon_to_world(s_lat, s_lon, c_wx_marker, c_wy_marker);
+      if (c_wx_marker - center_wx > 0.5)
+        c_wx_marker -= 1.0;
+      if (c_wx_marker - center_wx < -0.5)
+        c_wx_marker += 1.0;
 
-      // Use solid color for marker
-      ImU32 marker_col = IM_COL32(static_cast<int>(col[0] * 255), static_cast<int>(col[1] * 255), static_cast<int>(col[2] * 255), 255);
-      draw_list->AddCircleFilled(ImVec2(cx, cy), 5.0f, marker_col);
+      float cx_marker = static_cast<float>((c_wx_marker - center_wx) * world_size_pixels + screen_center.x);
+      float cy_marker = static_cast<float>((c_wy_marker - center_wy) * world_size_pixels + screen_center.y);
+
+      draw_list->AddCircleFilled(ImVec2(cx_marker, cy_marker), 5.0f, marker_col);
       if (is_selected)
       {
-        draw_list->AddCircle(ImVec2(cx, cy), 8.0f, IM_COL32(255, 255, 0, 255), 0, 2.0f);
+        draw_list->AddCircle(ImVec2(cx_marker, cy_marker), 8.0f, IM_COL32(255, 255, 0, 255), 0, 2.0f);
       }
 
       // Hit Test for Selection
-      // Check distance from cursor to center marker
       if (is_hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
       {
-        float dx = io.MousePos.x - cx;
-        float dy = io.MousePos.y - cy;
-        // 10 pixel radius threshold (squared is 100)
+        float dx = io.MousePos.x - cx_marker;
+        float dy = io.MousePos.y - cy_marker;
         if (dx * dx + dy * dy < 100.0f)
         {
           selected_index = static_cast<int>(idx);
