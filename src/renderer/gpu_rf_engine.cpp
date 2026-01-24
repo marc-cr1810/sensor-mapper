@@ -250,6 +250,10 @@ float turbo_b(float x) {
     return dot(v4, kBlueVec4) + dot(v2, kBlueVec2);
 }
 
+// Fixed color range for consistent visualization
+const float COLOR_MIN_DBM = -120.0;
+const float COLOR_MAX_DBM = -10.0;
+
 void main() {
     float my_elev = get_elevation(v_texcoord);
     float h_rx = 2.0 + my_elev;
@@ -259,7 +263,7 @@ void main() {
     for(int i=0; i<MAX_SENSORS; ++i) {
         if (i >= u_sensor_count) break;
         
-        if (max_dbm >= -50.0) break;
+        if (max_dbm >= -10.0) break; // Optimization: Stop if we are saturated
 
         vec2 s_uv = u_sensor_pos_range[i].xy;
         float s_range = u_sensor_pos_range[i].z;
@@ -303,6 +307,7 @@ void main() {
         }
         
         float estimated_rx = tx_pwr + gain - quick_loss - pattern_loss - 10.0; 
+        // We still use u_min_signal_dbm for culling invisible pixels to speed up
         if (estimated_rx < u_min_signal_dbm - 20.0) continue; 
 
         float diffraction_loss = 0.0;
@@ -340,14 +345,16 @@ void main() {
 
     // Output Visualization
     vec4 col = vec4(0.0);
+    // Use u_min_signal_dbm ONLY for cutoff
     if (max_dbm > u_min_signal_dbm) {
-        float val = (max_dbm - u_min_signal_dbm) / 100.0;
+        // Use fixed range for consistent colors
+        float val = (max_dbm - COLOR_MIN_DBM) / (COLOR_MAX_DBM - COLOR_MIN_DBM);
         val = clamp(val, 0.0, 1.0);
         
         float r = turbo_r(val);
         float g = turbo_g(val);
         float b = turbo_b(val);
-        float a = 0.4 + val * 0.6;
+        float a = 0.4 + val * 0.6; // Keep alpha scaling or make it fixed? Keeping it gives nice fade feel.
         
         col = vec4(r, g, b, a);
     }
