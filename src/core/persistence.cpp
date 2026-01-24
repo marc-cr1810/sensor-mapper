@@ -92,11 +92,6 @@ auto load_sensors(const std::string &filename, std::vector<sensor_t> &sensors) -
       color[1] = item["color"][1];
       color[2] = item["color"][2];
 
-      // Need a way to set color - assuming we can access it or need a setter?
-      // Wait, sensor_t only exposed get_color_data() and get_color().
-      // We need a set_color(std::array<float, 3>) or use get_color_data() to
-      // copy.
-
       float *color_ptr = sensors.back().get_color_data();
       color_ptr[0] = color[0];
       color_ptr[1] = color[1];
@@ -113,6 +108,96 @@ auto load_sensors(const std::string &filename, std::vector<sensor_t> &sensors) -
     sensors.back().set_propagation_model(static_cast<PropagationModel>(model_int));
   }
 
+  return true;
+}
+
+auto save_workspace(const std::string &filename, const workspace_t &workspace) -> bool
+{
+  json j;
+
+  j["camera"] = {{"lat", workspace.camera.lat}, {"lon", workspace.camera.lon}, {"zoom", workspace.camera.zoom}};
+
+  j["settings"] = {{"min_signal_dbm", workspace.settings.min_signal_dbm}, {"viz_mode", workspace.settings.viz_mode}};
+
+  j["layers"] = {{"show_rf", workspace.layers.show_rf},
+                 {"show_heatmap", workspace.layers.show_heatmap},
+                 {"show_composite", workspace.layers.show_composite},
+                 {"show_buildings", workspace.layers.show_buildings},
+                 {"show_elevation", workspace.layers.show_elevation},
+                 {"show_tdoa", workspace.layers.show_tdoa},
+                 {"show_hyperbolas", workspace.layers.show_hyperbolas},
+                 {"show_gdop", workspace.layers.show_gdop},
+                 {"show_accuracy", workspace.layers.show_accuracy}};
+
+  j["data"] = {{"sensor_file", workspace.data.sensor_file}, {"elevation_files", workspace.data.elevation_files}};
+
+  std::ofstream file(filename);
+  if (!file.is_open())
+  {
+    return false;
+  }
+
+  file << j.dump(4);
+  return true;
+}
+
+auto load_workspace(const std::string &filename, workspace_t &workspace) -> bool
+{
+  std::ifstream file(filename);
+  if (!file.is_open())
+  {
+    return false;
+  }
+
+  json j;
+  try
+  {
+    file >> j;
+  }
+  catch (const json::parse_error &e)
+  {
+    std::cerr << "JSON Parse Error: " << e.what() << std::endl;
+    return false;
+  }
+
+  if (j.contains("camera"))
+  {
+    workspace.camera.lat = j["camera"].value("lat", 0.0);
+    workspace.camera.lon = j["camera"].value("lon", 0.0);
+    workspace.camera.zoom = j["camera"].value("zoom", 10.0);
+  }
+
+  if (j.contains("settings"))
+  {
+    workspace.settings.min_signal_dbm = j["settings"].value("min_signal_dbm", -90.0f);
+    workspace.settings.viz_mode = j["settings"].value("viz_mode", 0);
+  }
+
+  if (j.contains("layers"))
+  {
+    workspace.layers.show_rf = j["layers"].value("show_rf", true);
+    workspace.layers.show_heatmap = j["layers"].value("show_heatmap", true);
+    workspace.layers.show_composite = j["layers"].value("show_composite", false);
+    workspace.layers.show_buildings = j["layers"].value("show_buildings", false);
+    workspace.layers.show_elevation = j["layers"].value("show_elevation", false);
+    workspace.layers.show_tdoa = j["layers"].value("show_tdoa", false);
+    workspace.layers.show_hyperbolas = j["layers"].value("show_hyperbolas", true);
+    workspace.layers.show_gdop = j["layers"].value("show_gdop", false);
+    workspace.layers.show_accuracy = j["layers"].value("show_accuracy", false);
+  }
+
+  if (j.contains("data"))
+  {
+    workspace.data.sensor_file = j["data"].value("sensor_file", "sensors.json");
+    workspace.data.elevation_files.clear();
+    if (j["data"].contains("elevation_files") && j["data"]["elevation_files"].is_array())
+    {
+      for (const auto &item : j["data"]["elevation_files"])
+      {
+        workspace.data.elevation_files.push_back(item.get<std::string>());
+      }
+    }
+  }
   return true;
 }
 

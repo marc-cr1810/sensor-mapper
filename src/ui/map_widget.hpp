@@ -31,6 +31,15 @@ public:
   auto fetch_buildings_near(double lat, double lon) -> void;
 
   auto set_center(double lat, double lon) -> void;
+  auto get_center_lat() const -> double
+  {
+    return m_center_lat;
+  }
+  auto get_center_lon() const -> double
+  {
+    return m_center_lon;
+  }
+
   auto set_zoom(double zoom) -> void;
 
   auto set_map_source(int source_index) -> void;

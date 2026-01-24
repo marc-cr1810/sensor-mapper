@@ -91,7 +91,7 @@ void AppUI::render(map_widget_t &map, std::vector<sensor_t> &sensors, std::set<i
   // Dockspace
   ImGui::DockSpaceOverViewport(0, ImGui::GetMainViewport());
 
-  render_main_menu(sensors, selected_indices, map, on_exit);
+  render_main_menu(sensors, selected_indices, map, elevation_service, on_exit);
 
   if (m_show_sensor_config)
   {
@@ -180,12 +180,74 @@ void AppUI::render(map_widget_t &map, std::vector<sensor_t> &sensors, std::set<i
   }
 }
 
-void AppUI::render_main_menu(std::vector<sensor_t> &sensors, std::set<int> &selected_index, map_widget_t &map, std::function<void()> on_exit)
+void AppUI::render_main_menu(std::vector<sensor_t> &sensors, std::set<int> &selected_index, map_widget_t &map, elevation_service_t &elevation_service, std::function<void()> on_exit)
 {
   if (ImGui::BeginMainMenuBar())
   {
     if (ImGui::BeginMenu("File"))
     {
+      if (ImGui::MenuItem("Save Workspace"))
+      {
+        persistence::workspace_t ws;
+        ws.camera.lat = map.get_center_lat();
+        ws.camera.lon = map.get_center_lon();
+        ws.camera.zoom = map.get_zoom();
+
+        ws.settings.min_signal_dbm = map.get_min_signal_dbm();
+        ws.settings.viz_mode = map.get_viz_mode();
+
+        ws.layers.show_rf = map.get_show_rf_gradient();
+        ws.layers.show_heatmap = map.get_show_heatmap_overlay();
+        ws.layers.show_composite = map.get_show_composite();
+        ws.layers.show_buildings = map.get_show_buildings();
+        ws.layers.show_elevation = map.get_show_elevation_sources();
+        ws.layers.show_tdoa = map.get_show_tdoa_analysis();
+        ws.layers.show_hyperbolas = map.get_show_hyperbolas();
+        ws.layers.show_gdop = map.get_show_gdop_contours();
+        ws.layers.show_accuracy = map.get_show_accuracy_heatmap();
+
+        ws.data.elevation_files = elevation_service.get_loaded_files();
+
+        persistence::save_workspace("workspace.json", ws);
+        persistence::save_sensors(SENSORS_FILE, sensors); // Also save sensors implicitly
+      }
+
+      if (ImGui::MenuItem("Load Workspace"))
+      {
+        persistence::workspace_t ws;
+        if (persistence::load_workspace("workspace.json", ws))
+        {
+          map.set_center(ws.camera.lat, ws.camera.lon);
+          map.set_zoom(ws.camera.zoom);
+
+          map.set_min_signal_dbm(ws.settings.min_signal_dbm);
+          map.set_viz_mode(ws.settings.viz_mode);
+
+          map.set_show_rf_gradient(ws.layers.show_rf);
+          map.set_show_heatmap_overlay(ws.layers.show_heatmap);
+          map.set_show_composite(ws.layers.show_composite);
+          map.set_show_buildings(ws.layers.show_buildings);
+          map.set_show_elevation_sources(ws.layers.show_elevation);
+          map.set_show_tdoa_analysis(ws.layers.show_tdoa);
+          map.set_show_hyperbolas(ws.layers.show_hyperbolas);
+          map.set_show_gdop_contours(ws.layers.show_gdop);
+          map.set_show_accuracy_heatmap(ws.layers.show_accuracy);
+
+          // Restore elevation files
+          for (const auto &path : ws.data.elevation_files)
+          {
+            elevation_service.load_local_file(path);
+          }
+
+          // Reload sensors
+          persistence::load_sensors(SENSORS_FILE, sensors);
+
+          map.invalidate_rf_heatmap();
+        }
+      }
+
+      ImGui::Separator();
+
       if (ImGui::MenuItem("Save Sensors", "Ctrl+S"))
       {
         persistence::save_sensors(SENSORS_FILE, sensors);
@@ -195,6 +257,7 @@ void AppUI::render_main_menu(std::vector<sensor_t> &sensors, std::set<int> &sele
         persistence::load_sensors(SENSORS_FILE, sensors);
         if (!selected_index.empty() && *selected_index.rbegin() >= static_cast<int>(sensors.size()))
           selected_index.clear();
+        map.invalidate_rf_heatmap();
       }
       ImGui::Separator();
       if (ImGui::MenuItem("Exit", "Alt+F4"))

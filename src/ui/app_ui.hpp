@@ -24,7 +24,7 @@ public:
   void render(map_widget_t &map, std::vector<sensor_t> &sensors, std::set<int> &selected_indices, elevation_service_t &elevation_service, antenna_pattern_ui_state_t &antenna_ui_state, std::function<void()> on_exit);
 
 private:
-  void render_main_menu(std::vector<sensor_t> &sensors, std::set<int> &selected_indices, map_widget_t &map, std::function<void()> on_exit);
+  void render_main_menu(std::vector<sensor_t> &sensors, std::set<int> &selected_indices, map_widget_t &map, elevation_service_t &elevation_service, std::function<void()> on_exit);
   void render_sensor_config(std::vector<sensor_t> &sensors, std::set<int> &selected_indices, map_widget_t &map, elevation_service_t &elevation_service, antenna_pattern_ui_state_t &antenna_ui_state);
   void render_map_view_controls(map_widget_t &map);
   void render_elevation_data(elevation_service_t &elevation_service, map_widget_t &map);

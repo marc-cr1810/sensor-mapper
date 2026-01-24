@@ -40,6 +40,7 @@ auto elevation_service_t::load_local_file(const std::string &path) -> bool
     // We assume if it failed inside, it's just an empty source.
     // Ideally geotiff_source_t should expose is_valid()
     add_source(source);
+    m_loaded_files.push_back(path);
     return true;
   }
   else if (ext == ".las" || ext == ".laz" || ext == ".LAS" || ext == ".LAZ")

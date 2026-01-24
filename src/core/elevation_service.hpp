@@ -34,8 +34,14 @@ public:
     return m_sources.size();
   }
 
+  auto get_loaded_files() const -> const std::vector<std::string> &
+  {
+    return m_loaded_files;
+  }
+
 private:
   std::vector<std::shared_ptr<elevation_source_t>> m_sources;
+  std::vector<std::string> m_loaded_files;
 };
 
 } // namespace sensor_mapper
