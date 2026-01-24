@@ -45,7 +45,10 @@ map_widget_t::~map_widget_t()
 auto map_widget_t::update() -> void
 {
   m_tile_service->update();
-  m_building_service->update();
+  if (m_building_service->update())
+  {
+    m_heatmap_dirty = true; // Refresh RF calculation when new buildings are loaded
+  }
 
   // GPU engine is synchronous, no future check needed.
 }
@@ -597,10 +600,15 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors, int &selected_inde
       // Also added 100% margin to render area for smoother panning
       double lat_margin = (max_lat - min_lat) * 1.0;
       double lon_margin = (max_lon - min_lon) * 1.0;
-      double render_min_lat = min_lat - lat_margin;
-      double render_max_lat = max_lat + lat_margin;
-      double render_min_lon = min_lon - lon_margin;
-      double render_max_lon = max_lon + lon_margin;
+
+      // Snap to grid to prevent "swimming" artifacts during panning
+      // Grid step of 0.001 degrees is approx 111 meters
+      const double GRID_STEP = 0.001;
+
+      double render_min_lat = std::floor((min_lat - lat_margin) / GRID_STEP) * GRID_STEP;
+      double render_max_lat = std::ceil((max_lat + lat_margin) / GRID_STEP) * GRID_STEP;
+      double render_min_lon = std::floor((min_lon - lon_margin) / GRID_STEP) * GRID_STEP;
+      double render_max_lon = std::ceil((max_lon + lon_margin) / GRID_STEP) * GRID_STEP;
 
       bool view_changed_significantly = std::abs(render_min_lat - m_prev_min_lat) > 0.01 || std::abs(render_max_lat - m_prev_max_lat) > 0.01 || std::abs(render_min_lon - m_prev_min_lon) > 0.01 ||
                                         std::abs(render_max_lon - m_prev_max_lon) > 0.01 || sensors.size() != m_prev_sensor_count;

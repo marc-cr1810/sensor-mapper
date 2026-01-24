@@ -116,9 +116,9 @@ void gpu_rf_engine_t::resize_fbo(int width, int height)
 
 void gpu_rf_engine_t::update_elevation_texture(elevation_service_t *service, const building_service_t *building_service, double min_lat, double max_lat, double min_lon, double max_lon)
 {
-  // Use lower resolution for elevation texture to reduce memory and sampling cost
-  int w = 256;
-  int h = 256;
+  // Use higher resolution for elevation texture to reduce aliasing and improve stability
+  int w = 1024;
+  int h = 1024;
 
   std::vector<float> data(w * h, 0.0f);
 
