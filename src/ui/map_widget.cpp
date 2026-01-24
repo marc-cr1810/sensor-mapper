@@ -623,42 +623,80 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors, int &selected_inde
           m_building_service->fetch_buildings(render_min_lat, render_max_lat, render_min_lon, render_max_lon);
         }
 
-        m_heatmap_texture_id = m_rf_engine->render(sensors, &elevation_service, m_building_service.get(), render_min_lat, render_max_lat, render_min_lon, render_max_lon, m_min_signal_dbm);
-        m_heatmap_dirty = false;
-        m_last_render_time = current_time;
+        auto result = m_rf_engine->render(sensors, &elevation_service, m_building_service.get(), render_min_lat, render_max_lat, render_min_lon, render_max_lon, m_min_signal_dbm);
+        m_heatmap_texture_id = result.texture_id;
 
-        // Update tracked view with expanded bounds
-        m_prev_min_lat = render_min_lat;
-        m_prev_max_lat = render_max_lat;
-        m_prev_min_lon = render_min_lon;
-        m_prev_max_lon = render_max_lon;
-        m_prev_sensor_count = sensors.size();
+        // IMPORTANT: Only acknowledge "clean" state if result is ready/fresh.
+        // If result.is_ready is false, it means we are still generating, so we stay dirty or just wait for next frame poll?
+        // Actually, we should keep m_heatmap_dirty = true?
+        // No, render() async logic will return old data. We display old data.
+        // We set m_heatmap_dirty = false, but the engine is working.
+        // The engine doesn't have a callback. We need to poll?
+        // Current logic: m_heatmap_dirty controls if we CALL render().
+        // If we call render() and it returns not-ready, we should probably keep calling it?
+        // Or better: render() starts the work. We can just call it next frame?
+        // But map_widget::draw calls render only if dirty or moved.
+        // If we are "generating", we need to keep polling render() to check for completion.
 
-        // Cache the actual render bounds for UV calculation
-        m_cached_render_min_lat = render_min_lat;
-        m_cached_render_max_lat = render_max_lat;
-        m_cached_render_min_lon = render_min_lon;
-        m_cached_render_max_lon = render_max_lon;
+        // Simplest Async polling:
+        if (!result.is_ready)
+        {
+          // Force update next frame to check for completion
+          m_heatmap_dirty = true;
+        }
+        else
+        {
+          m_heatmap_dirty = false;
+          m_last_render_time = current_time;
+
+          // Only update view tracking when we actually get a result for it
+          m_prev_min_lat = render_min_lat;
+          m_prev_max_lat = render_max_lat;
+          m_prev_min_lon = render_min_lon;
+          m_prev_max_lon = render_max_lon;
+          m_prev_sensor_count = sensors.size();
+        }
+
+        // Cache the actual render bounds for UV calculation (using what was ACTUALLY returned)
+        m_cached_render_min_lat = result.min_lat;
+        m_cached_render_max_lat = result.max_lat;
+        m_cached_render_min_lon = result.min_lon;
+        m_cached_render_max_lon = result.max_lon;
       }
 
       // Draw GPU-rendered texture overlay (if enabled)
       if (m_heatmap_texture_id != 0 && (m_show_heatmap_overlay || m_show_composite))
       {
-        // Calculate UV coordinates to map viewport to the larger rendered area
-        float u_min = (float)((min_lon - m_cached_render_min_lon) / (m_cached_render_max_lon - m_cached_render_min_lon));
-        float u_max = (float)((max_lon - m_cached_render_min_lon) / (m_cached_render_max_lon - m_cached_render_min_lon));
-        float v_min = (float)((max_lat - m_cached_render_max_lat) / (m_cached_render_min_lat - m_cached_render_max_lat));
-        float v_max = (float)((min_lat - m_cached_render_max_lat) / (m_cached_render_min_lat - m_cached_render_max_lat));
+        // Fix for drift: Draw the texture using its WORLD coordinates, pinned to the map.
+        // We calculate the screen position of the texture's corners.
+        // This ensures that even if we pan and the texture is stale (async updating), it stays pinned to the correct ground location.
+        // ImGui automatically handles clipping if the image is partially/fully off-screen.
 
-        // Clamp UV coordinates to valid range
-        // Since we use GL_CLAMP_TO_EDGE, falling outside 0-1 will repeat edge pixels (stretching).
-        // With the 100% margin above, this should rarely happen unless panning is extremely fast.
-        u_min = std::max(0.0f, std::min(1.0f, u_min));
-        u_max = std::max(0.0f, std::min(1.0f, u_max));
-        v_min = std::max(0.0f, std::min(1.0f, v_min));
-        v_max = std::max(0.0f, std::min(1.0f, v_max));
+        double tex_min_wx, tex_min_wy, tex_max_wx, tex_max_wy;
+        // TL of Texture (MaxLat, MinLon)
+        geo::lat_lon_to_world(m_cached_render_max_lat, m_cached_render_min_lon, tex_min_wx, tex_min_wy);
+        // BR of Texture (MinLat, MaxLon)
+        geo::lat_lon_to_world(m_cached_render_min_lat, m_cached_render_max_lon, tex_max_wx, tex_max_wy);
 
-        draw_list->AddImage((ImTextureID)(intptr_t)m_heatmap_texture_id, canvas_p0, ImVec2(canvas_p0.x + canvas_sz.x, canvas_p0.y + canvas_sz.y), ImVec2(u_min, v_min), ImVec2(u_max, v_max));
+        // Simple Wrap check relative to center
+        // If the texture is on the other side of the world wrap seam relative to center, adjust it.
+        auto adjust_wrap = [&](double &v)
+        {
+          double c = center_wx;
+          if (v - c > 0.5)
+            v -= 1.0;
+          if (v - c < -0.5)
+            v += 1.0;
+        };
+        adjust_wrap(tex_min_wx);
+        adjust_wrap(tex_max_wx);
+
+        float x0 = static_cast<float>((tex_min_wx - center_wx) * world_size_pixels + screen_center.x);
+        float y0 = static_cast<float>((tex_min_wy - center_wy) * world_size_pixels + screen_center.y);
+        float x1 = static_cast<float>((tex_max_wx - center_wx) * world_size_pixels + screen_center.x);
+        float y1 = static_cast<float>((tex_max_wy - center_wy) * world_size_pixels + screen_center.y);
+
+        draw_list->AddImage((ImTextureID)(intptr_t)m_heatmap_texture_id, ImVec2(x0, y0), ImVec2(x1, y1), ImVec2(0, 0), ImVec2(1, 1), IM_COL32(255, 255, 255, 200));
       }
     }
 
@@ -1226,6 +1264,8 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors, int &selected_inde
         c_wx_marker += 1.0;
 
       float cx_marker = static_cast<float>((c_wx_marker - center_wx) * world_size_pixels + screen_center.x);
+      // ... existing code ...
+
       float cy_marker = static_cast<float>((c_wy_marker - center_wy) * world_size_pixels + screen_center.y);
 
       draw_list->AddCircleFilled(ImVec2(cx_marker, cy_marker), 5.0f, marker_col);
