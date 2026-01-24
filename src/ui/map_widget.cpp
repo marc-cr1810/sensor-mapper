@@ -6,10 +6,11 @@
 #include "core/tdoa_solver.hpp"
 #include "core/tile_service.hpp"
 #include "imgui.h"
-// #include "core/rf_engine.hpp" // CPU engine
+
 #include "imgui_impl_opengl3.h"
 #include "renderer/gpu_rf_engine.hpp" // GPU Engine
 #include <random>
+
 #include <algorithm>
 #include <cmath>
 #include <format>
@@ -109,32 +110,22 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors, int &selected_inde
   // Update async tasks
   update();
 
-  // Track previous view bounds to detect changes (persist across frames)
-  static double prev_min_lat = 0.0, prev_max_lat = 0.0;
-  static double prev_min_lon = 0.0, prev_max_lon = 0.0;
-  static size_t prev_sensor_count = 0;
-  static double last_render_time = 0.0;
-  static double cached_render_min_lat = 0.0;
-  static double cached_render_max_lat = 0.0;
-  static double cached_render_min_lon = 0.0;
-  static double cached_render_max_lon = 0.0;
-
   // Calculate cursor altitude
-  static double cursor_alt = 0.0;
+
   // Update altitude periodically or every frame?
   // Every frame is cheap if elevation service caches well or is fast.
   // We'll trust elevation_service is reasonably fast (it checks cache).
-  float h = 0.0f;
-  if (elevation_service.get_elevation(m_mouse_lat, m_mouse_lon, h))
+  float elev_h = 0.0f;
+  if (elevation_service.get_elevation(m_mouse_lat, m_mouse_lon, elev_h))
   {
-    cursor_alt = static_cast<double>(h);
+    m_cursor_alt = static_cast<double>(elev_h);
   }
   else
   {
-    cursor_alt = 0.0; // or last known
+    m_cursor_alt = 0.0; // or last known
   }
 
-  ImGui::Text("Cursor: %.5f, %.5f | Alt: %.1f m | Zoom: %.2f", m_mouse_lat, m_mouse_lon, cursor_alt, m_zoom);
+  ImGui::Text("Cursor: %.5f, %.5f | Alt: %.1f m | Zoom: %.2f", m_mouse_lat, m_mouse_lon, m_cursor_alt, m_zoom);
 
   // Zoom controls (Buttons)
   if (ImGui::Button("Zoom In"))
@@ -145,10 +136,9 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors, int &selected_inde
       set_zoom(m_zoom - 1.0);
 
   ImGui::SameLine();
-  static int current_source = 0;
-  if (ImGui::Combo("Map Source", &current_source, "OpenStreetMap\0Terrain Heightmap\0Satellite (Esri)\0"))
+  if (ImGui::Combo("Map Source", &m_current_map_source, "OpenStreetMap\0Terrain Heightmap\0Satellite (Esri)\0"))
   {
-    set_map_source(current_source);
+    set_map_source(m_current_map_source);
   }
 
   // Simple canvas
@@ -175,10 +165,6 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors, int &selected_inde
   double n = std::pow(2.0, m_zoom);
   double world_size_pixels = n * tile_size;
 
-  // Context Menu State
-  static double ctx_lat = 0.0;
-  static double ctx_lon = 0.0;
-
   // Right Click to Open Context Menu
   if (is_hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right))
   {
@@ -186,7 +172,7 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors, int &selected_inde
     double mx = center_wx + (mouse_pos.x - (canvas_p0.x + canvas_sz.x * 0.5f)) / world_size_pixels;
     double my = center_wy + (mouse_pos.y - (canvas_p0.y + canvas_sz.y * 0.5f)) / world_size_pixels;
 
-    geo::world_to_lat_lon(mx, my, ctx_lat, ctx_lon);
+    geo::world_to_lat_lon(mx, my, m_ctx_lat, m_ctx_lon);
     ImGui::OpenPopup("map_context_menu");
   }
 
@@ -408,9 +394,7 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors, int &selected_inde
     max_lon = std::max(lon1, lon2);
 
     // Fetch buildings if not loaded/ensure data is available
-    // For now, we rely on the manual "fetch" or existing fetches.
-    // TODO: Trigger fetch if needed?
-    // We can use fetch_buildings_near(center) if we want to be proactive.
+    // TODO: Implement cleaner on-demand fetching strategy. Current manual/area-based fetch is sufficient for now.
 
     auto buildings = m_building_service->get_buildings_in_area(min_lat, max_lat, min_lon, max_lon);
 
@@ -541,19 +525,17 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors, int &selected_inde
         draw_list->AddPolyline(roof_points.data(), roof_points.size(), IM_COL32(220, 220, 220, 255), true, 1.0f);
 
         // Draw Walls (connect base to roof)
-        for (size_t i = 0; i < screen_points.size(); ++i)
+        for (int i = 0; i < static_cast<int>(screen_points.size()); ++i)
         {
-          size_t next = (i + 1) % screen_points.size();
-          ImVec2 p1 = screen_points[i];
+          size_t next = (static_cast<size_t>(i) + 1) % screen_points.size();
+          ImVec2 p1 = screen_points[static_cast<size_t>(i)];
           ImVec2 p2 = screen_points[next];
-          ImVec2 r1 = roof_points[i];
+          ImVec2 r1 = roof_points[static_cast<size_t>(i)];
           ImVec2 r2 = roof_points[next];
 
           // Draw quad
           ImVec2 quad[4] = {p1, p2, r2, r1};
           draw_list->AddConvexPolyFilled(quad, 4, IM_COL32(80, 80, 80, 180));
-          // draw_list->AddPolyline(quad, 4, IM_COL32(100, 100, 100, 255),
-          // true, 1.0f);
         }
       }
     }
@@ -636,11 +618,11 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors, int &selected_inde
       double render_min_lon = min_lon - lon_margin;
       double render_max_lon = max_lon + lon_margin;
 
-      bool view_changed_significantly = std::abs(render_min_lat - prev_min_lat) > 0.01 || std::abs(render_max_lat - prev_max_lat) > 0.01 || std::abs(render_min_lon - prev_min_lon) > 0.01 || std::abs(render_max_lon - prev_max_lon) > 0.01 ||
-                                        sensors.size() != prev_sensor_count;
+      bool view_changed_significantly = std::abs(render_min_lat - m_prev_min_lat) > 0.01 || std::abs(render_max_lat - m_prev_max_lat) > 0.01 || std::abs(render_min_lon - m_prev_min_lon) > 0.01 ||
+                                        std::abs(render_max_lon - m_prev_max_lon) > 0.01 || sensors.size() != m_prev_sensor_count;
 
       // Debounce: Only render if enough time has passed (0.3 seconds) OR if dirty flag is set
-      bool should_render = m_heatmap_dirty || (view_changed_significantly && (current_time - last_render_time) > 0.3);
+      bool should_render = m_heatmap_dirty || (view_changed_significantly && (current_time - m_last_render_time) > 0.3);
 
       if (should_render)
       {
@@ -651,30 +633,30 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors, int &selected_inde
 
         m_heatmap_texture_id = m_rf_engine->render(sensors, &elevation_service, m_building_service.get(), render_min_lat, render_max_lat, render_min_lon, render_max_lon, m_min_signal_dbm);
         m_heatmap_dirty = false;
-        last_render_time = current_time;
+        m_last_render_time = current_time;
 
         // Update tracked view with expanded bounds
-        prev_min_lat = render_min_lat;
-        prev_max_lat = render_max_lat;
-        prev_min_lon = render_min_lon;
-        prev_max_lon = render_max_lon;
-        prev_sensor_count = sensors.size();
+        m_prev_min_lat = render_min_lat;
+        m_prev_max_lat = render_max_lat;
+        m_prev_min_lon = render_min_lon;
+        m_prev_max_lon = render_max_lon;
+        m_prev_sensor_count = sensors.size();
 
         // Cache the actual render bounds for UV calculation
-        cached_render_min_lat = render_min_lat;
-        cached_render_max_lat = render_max_lat;
-        cached_render_min_lon = render_min_lon;
-        cached_render_max_lon = render_max_lon;
+        m_cached_render_min_lat = render_min_lat;
+        m_cached_render_max_lat = render_max_lat;
+        m_cached_render_min_lon = render_min_lon;
+        m_cached_render_max_lon = render_max_lon;
       }
 
       // Draw GPU-rendered texture overlay (if enabled)
       if (m_heatmap_texture_id != 0 && m_show_heatmap_overlay)
       {
         // Calculate UV coordinates to map viewport to the larger rendered area
-        float u_min = (float)((min_lon - cached_render_min_lon) / (cached_render_max_lon - cached_render_min_lon));
-        float u_max = (float)((max_lon - cached_render_min_lon) / (cached_render_max_lon - cached_render_min_lon));
-        float v_min = (float)((max_lat - cached_render_max_lat) / (cached_render_min_lat - cached_render_max_lat));
-        float v_max = (float)((min_lat - cached_render_max_lat) / (cached_render_min_lat - cached_render_max_lat));
+        float u_min = (float)((min_lon - m_cached_render_min_lon) / (m_cached_render_max_lon - m_cached_render_min_lon));
+        float u_max = (float)((max_lon - m_cached_render_min_lon) / (m_cached_render_max_lon - m_cached_render_min_lon));
+        float v_min = (float)((max_lat - m_cached_render_max_lat) / (m_cached_render_min_lat - m_cached_render_max_lat));
+        float v_max = (float)((min_lat - m_cached_render_max_lat) / (m_cached_render_min_lat - m_cached_render_max_lat));
 
         // Clamp UV coordinates to valid range
         // Since we use GL_CLAMP_TO_EDGE, falling outside 0-1 will repeat edge pixels (stretching).
@@ -785,11 +767,7 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors, int &selected_inde
 
       // Note: We need world-space points later for drawing, but the cache
       // should store relative or world? The drawing logic converts lat/lon to
-      // world to screen. Screen depends on Zoom/Center. So we should cache the
-      // relative world-space offsets or just re-calculate screen pos from fixed
-      // Lat/Lon points. The previous raycasting code calculated 'points'
-      // directly as Screen Coordinates (px, py). Screen coords change when you
-      // Pan/Zoom. So we CANNOT cache screen coords if we Pan/Zoom. We MUST
+      // world to screen. Screen depends on Zoom/Center. So we CANNOT cache screen coords if we Pan/Zoom. We MUST
       // cache the resulting polygon vertices in Lat/Lon (or World Space). Let's
       // modify the loop to generate Lat/Lon points, then a second pass to
       // convert to Screen.
@@ -883,8 +861,8 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors, int &selected_inde
             double terrain_loss_db = 0.0;
             if (has_elevation)
             {
-              float target_h;
-              if (elevation_service.get_elevation(t_lat, t_lon, target_h))
+              float target_h_at_pt; // Renamed to avoid shadowing
+              if (elevation_service.get_elevation(t_lat, t_lon, target_h_at_pt))
               {
                 // Check line-of-sight obstruction
                 const double step_size = 50.0;
@@ -906,7 +884,7 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors, int &selected_inde
                   {
                     // Calculate expected height on LOS path
                     double progress = current_dist / test_dist;
-                    double expected_h = sensor_h + (target_h - sensor_h) * progress;
+                    double expected_h = sensor_h + (target_h_at_pt - sensor_h) * progress;
 
                     // Check for terrain obstruction
                     if (check_h > expected_h)
@@ -1017,12 +995,12 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors, int &selected_inde
           if (has_elevation && coverage_dist < range_m * 0.9)
           {
             // Only calculate terrain loss for significantly occluded points
-            float edge_h;
-            if (elevation_service.get_elevation(p_lat, p_lon, edge_h))
+            float h_at_pt; // Renamed to avoid shadowing
+            if (elevation_service.get_elevation(p_lat, p_lon, h_at_pt))
             {
-              if (edge_h > sensor_h + 10.0)
+              if (h_at_pt > sensor_h + 10.0)
               {
-                terrain_loss_db = (edge_h - sensor_h) * 5.0; // Simplified estimate
+                terrain_loss_db = (h_at_pt - sensor_h) * 5.0; // Simplified estimate
               }
             }
           }
@@ -1034,7 +1012,7 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors, int &selected_inde
           double p_rx_dbm = tx_power_dbm + tx_gain_dbi + rx_gain_dbi - path_loss_db - terrain_loss_db - antenna_pattern_loss;
 
           // Add to cache (Lat/Lon and Signal Strength)
-          new_cache_latlons.push_back(ImVec2((float)p_lat, (float)p_lon));
+          new_cache_latlons.push_back(ImVec2(static_cast<float>(p_lat), static_cast<float>(p_lon)));
           new_cache_signal_dbm.push_back(p_rx_dbm);
 
           // Convert to Screen for drawing now
@@ -1175,31 +1153,31 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors, int &selected_inde
   // Draw Context Menu if Open
   if (ImGui::BeginPopup("map_context_menu"))
   {
-    ImGui::Text("Location: %.4f, %.4f", ctx_lat, ctx_lon);
+    ImGui::Text("Location: %.4f, %.4f", m_ctx_lat, m_ctx_lon);
     ImGui::Separator();
     if (ImGui::Selectable("Add Sensor Here"))
     {
       if (on_add_sensor)
       {
-        on_add_sensor(ctx_lat, ctx_lon);
+        on_add_sensor(m_ctx_lat, m_ctx_lon);
       }
     }
     if (ImGui::Selectable("Set TDOA Test Point"))
     {
-      set_tdoa_test_point(ctx_lat, ctx_lon);
+      set_tdoa_test_point(m_ctx_lat, m_ctx_lon);
       // Automatically enable analysis and hyperbolas for convenience
       m_show_hyperbolas = true;
     }
     ImGui::Separator();
     if (ImGui::Selectable("Set Profile Start (A)"))
     {
-      m_profile_a = {ctx_lat, ctx_lon};
+      m_profile_a = {m_ctx_lat, m_ctx_lon};
       m_has_profile_a = true;
       m_show_profile_window = true;
     }
     if (ImGui::Selectable("Set Profile End (B)"))
     {
-      m_profile_b = {ctx_lat, ctx_lon};
+      m_profile_b = {m_ctx_lat, m_ctx_lon};
       m_has_profile_b = true;
       m_show_profile_window = true;
     }
@@ -1240,12 +1218,12 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors, int &selected_inde
     int h = m_rf_engine->get_height();
 
     // Calculate UV in the *rendered* texture
-    float u = (float)((m_mouse_lon - cached_render_min_lon) / (cached_render_max_lon - cached_render_min_lon));
-    float v = 1.0f - (float)((m_mouse_lat - cached_render_min_lat) / (cached_render_max_lat - cached_render_min_lat));
+    float u = (float)((m_mouse_lon - m_cached_render_min_lon) / (m_cached_render_max_lon - m_cached_render_min_lon));
+    float v = 1.0f - (float)((m_mouse_lat - m_cached_render_min_lat) / (m_cached_render_max_lat - m_cached_render_min_lat));
 
     // Pixel coords (0,0 bottom-left)
-    int px = static_cast<int>(u * w);
-    int py = static_cast<int>(v * h);
+    int px = static_cast<int>(u * static_cast<float>(w));
+    int py = static_cast<int>(v * static_cast<float>(h));
 
     // Clamp
     if (px >= 0 && px < w && py >= 0 && py < h)
@@ -1358,10 +1336,6 @@ auto map_widget_t::render_hyperbolas(const std::vector<sensor_t> &sensors, ImDra
 {
   if (sensors.size() < 2 || !m_tdoa_solver || !m_has_test_point)
     return;
-
-  // Render hyperbolas relative to reference sensor (first selected or index 0)
-  // We'll use the first sensor as the reference for now, consistent with tdoa_solver
-  const auto &ref_sensor = sensors[0];
 
   // Calculate TDOA for the test point
   auto test_tdoa = m_tdoa_solver->calculate_tdoa(sensors, m_test_point_lat, m_test_point_lon);

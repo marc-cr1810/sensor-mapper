@@ -126,8 +126,11 @@ else()
 endif()
 
 # Source Files
-set(SOURCES
-  src/main.cpp
+# Generate compile_commands.json for tooling
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+
+# Source Files
+set(SOURCES_CORE
   src/core/antenna_pattern.hpp
   src/core/antenna_pattern_io.hpp
   src/core/antenna_pattern_library.hpp
@@ -155,16 +158,29 @@ set(SOURCES
   src/core/geotiff_source.hpp
   src/core/lidar_source.cpp
   src/core/lidar_source.hpp
+)
+
+set(SOURCES_RENDERER
   src/renderer/shader.cpp
   src/renderer/shader.hpp
   src/renderer/gpu_rf_engine.cpp
   src/renderer/gpu_rf_engine.hpp
+)
+
+set(SOURCES_UI
   src/ui/map_widget.cpp
   src/ui/map_widget.hpp
   src/ui/texture.cpp
   src/ui/texture.hpp
   src/ui/antenna_pattern_ui.hpp
   src/ui/antenna_pattern_3d_viewer.hpp
+)
+
+set(SOURCES
+  src/main.cpp
+  ${SOURCES_CORE}
+  ${SOURCES_RENDERER}
+  ${SOURCES_UI}
 )
 
 # Executable

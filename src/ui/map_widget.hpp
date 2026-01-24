@@ -249,6 +249,25 @@ private:
   auto render_test_point(const std::vector<sensor_t> &sensors, ImDrawList *draw_list, const ImVec2 &canvas_p0, const ImVec2 &canvas_sz) -> void;
 
   auto draw_path_profile_window(elevation_service_t &elevation_service) -> void;
+
+  // View State (Refactored from statics)
+  double m_prev_min_lat = 0.0;
+  double m_prev_max_lat = 0.0;
+  double m_prev_min_lon = 0.0;
+  double m_prev_max_lon = 0.0;
+  size_t m_prev_sensor_count = 0;
+  double m_last_render_time = 0.0;
+  double m_cached_render_min_lat = 0.0;
+  double m_cached_render_max_lat = 0.0;
+  double m_cached_render_min_lon = 0.0;
+  double m_cached_render_max_lon = 0.0;
+
+  double m_cursor_alt = 0.0;    // Cached cursor altitude for display
+  int m_current_map_source = 0; // Current map source selection
+
+  // Context Menu State
+  double m_ctx_lat = 0.0;
+  double m_ctx_lon = 0.0;
 };
 
 } // namespace sensor_mapper

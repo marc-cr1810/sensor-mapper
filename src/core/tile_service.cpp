@@ -129,8 +129,13 @@ auto tile_service_t::get_tile(int z, int x, int y) -> std::shared_ptr<texture_t>
                                         std::ofstream f(p, std::ios::binary);
                                         f.write(r.text.data(), r.text.size());
                                       }
+                                      catch (const std::exception &e)
+                                      {
+                                        std::cerr << "Tile download failed: " << e.what() << "\n";
+                                      }
                                       catch (...)
                                       {
+                                        std::cerr << "Tile download failed: Unknown error\n";
                                       }
                                       return r.text;
                                     }

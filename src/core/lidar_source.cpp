@@ -160,67 +160,12 @@ auto lidar_source_t::get_elevation(double lat, double lon, float &out_height) ->
   if (m_transformer && m_transformer->is_valid())
   {
     // Transform Lat/Lon (WGS84) -> Projected X/Y
-    // Wait, our transformer is Source -> Target (File -> WGS84).
-    // We need WGS84 -> File.
-    // CrsTransformer `init(source, target)` sets up a forward transform.
-    // If we did init(File, WGS84), transform() converts X,Y(File) -> Lat,Lon(WGS84).
-    // We are *querying* with Lat,Lon and want to find File X,Y.
-    // So we need the INVERSE transform. Or we should have init(WGS84, File).
-
-    // Let's re-read crs_transformer setup.
-    // In lidar_source.cpp original code: "output = proj_trans(..., PJ_FWD, input)"
-    // where input was Lat/Lon. That implies the transform object was WGS84 -> File.
-
-    // My update above: `m_transformer->init(source_crs_str, "EPSG:4326")`
-    // That creates File -> WGS84.
-    // For Fallback (UTM), `transform` does UTM -> Lat/Lon.
-
-    // We need the reverse for `get_elevation(lat, lon)`.
-    // Implementing inverse fallback is harder?
-    // Lat/Lon -> UTM is standard.
-    // Let's change init to `init("EPSG:4326", source_crs_str)`.
-    // But verify Fallback supports that.
-    // Fallback in my impl checks `source_crs` for UTM code.
-    // If source is 4326, and TARGET is UTM, we need LatLon -> UTM logic.
-
-    // Actually, checking point inclusion is easier in Lat/Lon if we convert the *bounds*?
-    // No, grid is rasterized in X/Y. We must convert query(Lat,Lon) -> X/Y.
-
-    // I should update `crs_transformer` to support Inverse or just explicit directions.
-    // Let's assume I WILL update `crs_transformer` to handle both directions or I update init here.
-    // If I use `init("EPSG:4326", source_crs_str)`, PROJ works fine.
-    // Fallback logic needs to detect Target is UTM etc.
-
-    // Let's do this:
-    // 1. `lidar_source` will create `m_transformer` as WGS84 -> File.
-    // 2. `crs_transformer` needs to be smart enough to detect UTM in target if source is 4326.
-
-    // BUT `lidar_source` code above did `init(source_crs_str, "EPSG:4326")`.
-    // I should change that to `init("EPSG:4326", source_crs_str)`.
-
-    // I will update this code block to use `init("EPSG:4326", source_crs_str)`.
-    // And I will assume `crs_transformer` (which I just wrote) needs update?
-    // I wrote `crs_transformer` to check `source_crs` for UTM.
-    // I need to update `crs_transformer.cpp` to check TARGET or handle direction.
-
-    // Since I can't edit `crs_transformer.cpp` in *this* step (singular replacement),
-    // I will proceed with this replacement, BUT I will issue a fix step next.
-
-    // Wait, `get_elevation` query logic:
-    // x = lon; y = lat;
-    // We want x,y in File CRS.
-
-    // Let's assume for now I will fix `crs_transformer` to handle EPSG:4326 -> UTM.
-    // So here I will call `init("EPSG:4326", source_crs_str)`.
-
-    // NOTE: PROJ 6 order for 4326 is Lat, Lon.
-    // My `transform` in PROJ block returned `out_x` (From x).
-    // If I pass Lat, Lon as X, Y...
-
-    // Let's stick to standard names.
+    // Note: We initialize the transformer with "EPSG:4326" -> source_crs_str (File CRS).
+    // The transform() method will thus convert input Lat/Lon to the file's projected X/Y coordinates.
+    // Note on Axis Order: For EPSG:4326 in PROJ 6+, the order is often Lat, Lon (X=Lat).
+    // We pass lat, lon accordingly.
     double tx, ty;
-    // Lat is X? No, usually X=Lon, Y=Lat for math, but PROJ 4326 is X=Lat.
-    // I'll pass X=Lat, Y=Lon to be safe with PROJ defaults for 4326.
+    // Attempt transform
     if (m_transformer->transform(lat, lon, tx, ty))
     {
       x = tx;

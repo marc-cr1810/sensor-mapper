@@ -963,7 +963,7 @@ private:
     // Draw angle lines
     for (int angle = 0; angle < 360; angle += 30)
     {
-      float angle_rad = angle * M_PI / 180.0f;
+      float angle_rad = static_cast<float>(angle * M_PI / 180.0);
       float x = center.x + std::sin(angle_rad) * radius;
       float y = center.y - std::cos(angle_rad) * radius;
       draw_list->AddLine(center, ImVec2(x, y), IM_COL32(50, 50, 50, 255), 1.0f);
@@ -976,7 +976,7 @@ private:
     std::vector<ImVec2> points;
     for (const auto &point : plot_data.points)
     {
-      float angle_rad = point.angle_deg * M_PI / 180.0f;
+      float angle_rad = static_cast<float>(point.angle_deg * M_PI / 180.0);
       float r = point.radius * radius;
       float x = center.x + std::sin(angle_rad) * r;
       float y = center.y - std::cos(angle_rad) * r;
@@ -986,7 +986,7 @@ private:
     // Fill pattern area
     if (!points.empty())
     {
-      draw_list->AddConvexPolyFilled(points.data(), points.size(), IM_COL32(0, 150, 255, 80));
+      draw_list->AddConvexPolyFilled(points.data(), static_cast<int>(points.size()), IM_COL32(0, 150, 255, 80));
 
       // Draw outline
       for (size_t i = 0; i < points.size(); ++i)
@@ -1000,8 +1000,8 @@ private:
     if (params.show_3db_contour)
     {
       float bw = pattern.horizontal_beamwidth_deg / 2.0f;
-      float angle1_rad = -bw * M_PI / 180.0f;
-      float angle2_rad = bw * M_PI / 180.0f;
+      float angle1_rad = static_cast<float>(-bw * M_PI / 180.0);
+      float angle2_rad = static_cast<float>(bw * M_PI / 180.0);
 
       float x1 = center.x + std::sin(angle1_rad) * radius;
       float y1 = center.y - std::cos(angle1_rad) * radius;
@@ -1063,7 +1063,7 @@ private:
         float normalized = (gain_db - params.min_gain_db) / (params.max_gain_db - params.min_gain_db);
         normalized = std::clamp(normalized, 0.0f, 1.0f);
 
-        float angle_rad = angle * M_PI / 180.0f;
+        float angle_rad = static_cast<float>(angle * M_PI / 180.0);
         float r = radius * normalized;
         float x = slice_center.x + std::sin(angle_rad) * r;
         float y = slice_center.y - std::cos(angle_rad) * r;
@@ -1077,7 +1077,7 @@ private:
       // Fill the pattern shape
       if (!points.empty())
       {
-        draw_list->AddConvexPolyFilled(points.data(), points.size(), IM_COL32((color >> 0) & 0xFF, (color >> 8) & 0xFF, (color >> 16) & 0xFF, 100));
+        draw_list->AddConvexPolyFilled(points.data(), static_cast<int>(points.size()), IM_COL32((color >> 0) & 0xFF, (color >> 8) & 0xFF, (color >> 16) & 0xFF, 100));
 
         // Draw outline
         for (size_t i = 0; i < points.size() - 1; ++i)

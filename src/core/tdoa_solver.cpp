@@ -53,7 +53,7 @@ auto tdoa_solver_t::solve_position(const std::vector<sensor_t> &sensors, const s
   double lon = initial_lon;
 
   const int max_iterations = 50;
-  const double convergence_threshold = 1e-8; // radians
+  // adians
 
   std::optional<std::vector<std::vector<double>>> final_cov;
 

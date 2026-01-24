@@ -238,15 +238,96 @@ private:
     elevation_deg = get_effective_elevation(elevation_deg);
 
     // Find surrounding indices
-    int azi_idx = find_nearest_azimuth_index(azimuth_deg);
-    int elev_idx = find_nearest_elevation_index(elevation_deg);
 
-    // For now, use nearest neighbor (full bilinear interpolation is more complex)
-    // TODO: Implement proper bilinear interpolation
-    if (elev_idx >= 0 && elev_idx < static_cast<int>(gain_db.size()) && azi_idx >= 0 && azi_idx < static_cast<int>(gain_db[elev_idx].size()))
+    // Check bounds
+    if (gain_db.empty() || azimuth_angles.empty())
     {
-      return gain_db[elev_idx][azi_idx];
+      return -100.0f;
     }
+
+    // --- Bilinear Interpolation ---
+
+    // 1. Azimuth Interpolation
+    // Find two azimuth indices: azi_idx (left) and azi_next (right)
+    // Note: find_nearest can return index > or < target. Let's use lower_bound explicitly logic again or just refine indices.
+    // Simpler: iterate or use mod math since it wraps 0-360.
+
+    // Find lower bound index
+    auto az_it = std::lower_bound(azimuth_angles.begin(), azimuth_angles.end(), azimuth_deg);
+    int idx_az1, idx_az2;
+    if (az_it == azimuth_angles.end())
+    {
+      idx_az1 = static_cast<int>(azimuth_angles.size() - 1);
+      idx_az2 = 0; // Wrap
+    }
+    else if (az_it == azimuth_angles.begin())
+    {
+      idx_az1 = static_cast<int>(azimuth_angles.size() - 1); // Wrap back
+      idx_az2 = 0;
+      if (azimuth_deg > azimuth_angles[0])
+      { // Should not happen if normalized 0-360 and sorted
+        idx_az1 = 0;
+        idx_az2 = 1; // Fallback
+      }
+    }
+    else
+    {
+      idx_az2 = static_cast<int>(std::distance(azimuth_angles.begin(), az_it));
+      idx_az1 = idx_az2 - 1;
+    }
+
+    // Azimuth fraction
+    float az1 = azimuth_angles[idx_az1];
+    float az2 = azimuth_angles[idx_az2];
+
+    // Handle wrapping for angle diff
+    float az_span = az2 - az1;
+    if (az_span < 0)
+      az_span += 360.0f;
+    float az_diff = azimuth_deg - az1;
+    if (az_diff < 0)
+      az_diff += 360.0f;
+
+    float t_az = (az_span > 0.001f) ? (az_diff / az_span) : 0.0f;
+
+    // 2. Elevation Interpolation
+    // Find lower bound index
+    auto el_it = std::lower_bound(elevation_angles.begin(), elevation_angles.end(), elevation_deg);
+    int idx_el1, idx_el2;
+
+    // Elevation does NOT wrap. Clamp.
+    if (el_it == elevation_angles.end())
+    {
+      idx_el1 = idx_el2 = static_cast<int>(elevation_angles.size() - 1);
+    }
+    else if (el_it == elevation_angles.begin())
+    {
+      idx_el1 = idx_el2 = 0;
+    }
+    else
+    {
+      idx_el2 = static_cast<int>(std::distance(elevation_angles.begin(), el_it));
+      idx_el1 = idx_el2 - 1;
+    }
+
+    float el1 = elevation_angles[idx_el1];
+    float el2 = elevation_angles[idx_el2];
+    float el_span = el2 - el1;
+    float t_el = (el_span > 0.001f) ? ((elevation_deg - el1) / el_span) : 0.0f;
+
+    // 3. Four samples
+    // gain_db[el][az]
+    float g11 = gain_db[idx_el1][idx_az1]; // Bottom-Left
+    float g12 = gain_db[idx_el1][idx_az2]; // Bottom-Right
+    float g21 = gain_db[idx_el2][idx_az1]; // Top-Left
+    float g22 = gain_db[idx_el2][idx_az2]; // Top-Right
+
+    // Interpolate Azimuth (Rows)
+    float val_bottom = g11 * (1.0f - t_az) + g12 * t_az;
+    float val_top = g21 * (1.0f - t_az) + g22 * t_az;
+
+    // Interpolate Elevation (Vertical)
+    return val_bottom * (1.0f - t_el) + val_top * t_el;
 
     return -100.0f; // Very low gain if out of bounds
   }
@@ -420,7 +501,7 @@ public:
       else if (std::abs(angle) < 90.0f)
       {
         float side_lobe_level = -15.0f - static_cast<float>(num_elements);
-        gain = side_lobe_level + 5.0f * std::cos(angle * M_PI / 180.0f);
+        gain = side_lobe_level + 5.0f * static_cast<float>(std::cos(angle * M_PI / 180.0));
       }
       // Back lobe
       else
@@ -467,7 +548,7 @@ public:
     // Calculate gain from diameter
     float wavelength_m = 300.0f / frequency_mhz;
     float efficiency = 0.6f; // Typical parabolic efficiency
-    float gain_dbi = 10.0f * std::log10(efficiency * std::pow(M_PI * diameter_m / wavelength_m, 2.0f));
+    float gain_dbi = 10.0f * static_cast<float>(std::log10(efficiency * std::pow(M_PI * diameter_m / wavelength_m, 2.0f)));
 
     // Calculate beamwidth (degrees)
     float beamwidth_deg = 70.0f * wavelength_m / diameter_m;
@@ -525,7 +606,7 @@ public:
 
       // Dipole has omnidirectional pattern in azimuth
       // Null at zenith and nadir (elevation ±90°)
-      float elev_factor = std::cos(elev * M_PI / 180.0f);
+      float elev_factor = static_cast<float>(std::cos(elev * M_PI / 180.0));
       float gain = 2.15f + 10.0f * std::log10(elev_factor * elev_factor + 0.001f);
 
       for (int azi = 0; azi < 360; ++azi)

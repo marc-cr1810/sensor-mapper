@@ -125,7 +125,7 @@ auto rf_engine_t::compute_coverage(const std::vector<sensor_t> &sensors, elevati
                             {
                               // Search for the "dominant" obstacle (highest Fresnel parameter v)
                               double max_v = -10.0; // Start with a value indicating clear LoS
-                              bool any_obstruction = false;
+                              // float any_obstruction = false;
 
                               int steps = static_cast<int>(dist_m / 50.0); // 50m resolution
                               if (steps < 10)
@@ -133,13 +133,13 @@ auto rf_engine_t::compute_coverage(const std::vector<sensor_t> &sensors, elevati
 
                               for (int i = 1; i < steps; ++i)
                               {
-                                double t = (double)i / steps;
-                                double d1 = dist_m * t;
-                                double d2 = dist_m * (1.0 - t);
+                                double step_t = (double)i / steps;
+                                double d1 = dist_m * step_t;
+                                double d2 = dist_m * (1.0 - step_t);
 
                                 // Point on the line (Great Circle approximated as line for lat/lon)
-                                double p_lat = sensor.get_latitude() + t * (cell_lat - sensor.get_latitude());
-                                double p_lon = sensor.get_longitude() + t * (cell_lon - sensor.get_longitude());
+                                double p_lat = sensor.get_latitude() + step_t * (cell_lat - sensor.get_latitude());
+                                double p_lon = sensor.get_longitude() + step_t * (cell_lon - sensor.get_longitude());
 
                                 float p_elev = 0.0f;
                                 elevation_service->get_elevation(p_lat, p_lon, p_elev);
@@ -152,7 +152,7 @@ auto rf_engine_t::compute_coverage(const std::vector<sensor_t> &sensors, elevati
                                 // h_obstacle_effective = h_terrain + h_curvature_bulge
 
                                 // Height of the straight line ray at this point
-                                double ray_h = h_tx + t * (h_rx - h_tx);
+                                double ray_h = h_tx + step_t * (h_rx - h_tx);
 
                                 // Earth curvature "bulge" at distance d1 from TX and d2 from RX
                                 // bulge = (d1 * d2) / (2 * k * R)

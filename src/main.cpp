@@ -3,7 +3,7 @@
 #include "imgui_impl_glfw.h"
 #include "imgui_impl_opengl3.h"
 #include <GLFW/glfw3.h>
-#include <stdio.h>
+#include <iostream>
 #include <vector>
 
 #include "core/persistence.hpp"
@@ -14,7 +14,7 @@
 // Forward declaration
 namespace sensor_mapper
 {
-void render_ui(map_widget_t &map, std::vector<sensor_t> &sensors, int &selected_index, elevation_service_t &elevation_service, antenna_pattern_ui_state_t &antenna_ui_state);
+void render_ui(map_widget_t &map, std::vector<sensor_t> &sensors, int &selected_index, elevation_service_t &elevation_service, antenna_pattern_ui_state_t &antenna_ui_state, std::function<void()> on_exit);
 }
 
 constexpr const char *SENSORS_FILE = "sensors.json";
@@ -23,7 +23,7 @@ constexpr const char *SENSORS_FILE = "sensors.json";
 int main(int, char **)
 {
   // Setup window
-  glfwSetErrorCallback([](int error, const char *description) { fprintf(stderr, "Glfw Error %d: %s\n", error, description); });
+  glfwSetErrorCallback([](int error, const char *description) { std::cerr << "Glfw Error " << error << ": " << description << std::endl; });
 
   if (!glfwInit())
     return 1;
@@ -43,7 +43,7 @@ int main(int, char **)
   // Initialize GLAD
   if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress))
   {
-    fprintf(stderr, "Failed to initialize GLAD\n");
+    std::cerr << "Failed to initialize GLAD" << std::endl;
     return 1;
   }
 
@@ -88,8 +88,13 @@ int main(int, char **)
     ImGui_ImplGlfw_NewFrame();
     ImGui::NewFrame();
 
+    struct ExitContext
+    {
+      GLFWwindow *win;
+    } exit_ctx = {window};
+
     // Core UI Logic
-    sensor_mapper::render_ui(map_widget, sensors, selected_sensor_index, elevation_service, antenna_ui_state);
+    sensor_mapper::render_ui(map_widget, sensors, selected_sensor_index, elevation_service, antenna_ui_state, [&exit_ctx]() { glfwSetWindowShouldClose(exit_ctx.win, 1); });
 
     // Rendering
     ImGui::Render();
@@ -116,7 +121,7 @@ int main(int, char **)
 
 namespace sensor_mapper
 {
-void render_ui(map_widget_t &map, std::vector<sensor_t> &sensors, int &selected_index, elevation_service_t &elevation_service, antenna_pattern_ui_state_t &antenna_ui_state)
+void render_ui(map_widget_t &map, std::vector<sensor_t> &sensors, int &selected_index, elevation_service_t &elevation_service, antenna_pattern_ui_state_t &antenna_ui_state, std::function<void()> on_exit)
 {
   // Dockspace
   ImGui::DockSpaceOverViewport(0, ImGui::GetMainViewport());
@@ -145,8 +150,8 @@ void render_ui(map_widget_t &map, std::vector<sensor_t> &sensors, int &selected_
       ImGui::Separator();
       if (ImGui::MenuItem("Exit", "Alt+F4"))
       {
-        // In a real app we might want a callback to close the window
-        // But for now we rely on the window close button
+        if (on_exit)
+          on_exit();
       }
       ImGui::EndMenu();
     }
