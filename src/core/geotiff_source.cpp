@@ -1,4 +1,5 @@
 #include "core/geotiff_source.hpp"
+#include "core/crs_transformer.hpp"
 #include <tiffio.h>
 #include <iostream>
 #include <cmath>
@@ -8,19 +9,16 @@ namespace sensor_mapper
 
 auto geotiff_source_t::load() -> bool
 {
-  std::cout << "GeoTIFF: Starting load for " << m_path << std::endl;
 
   // Suppress warnings for GeoTIFF tags (they're expected and harmless)
   TIFFSetWarningHandler(nullptr);
 
-  std::cout << "GeoTIFF: Opening file..." << std::endl;
   TIFF *tif = TIFFOpen(m_path.string().c_str(), "r");
   if (!tif)
   {
     std::cerr << "Failed to open GeoTIFF: " << m_path << std::endl;
     return false;
   }
-  std::cout << "GeoTIFF: File opened successfully" << std::endl;
 
   uint32_t w, h;
   if (!TIFFGetField(tif, TIFFTAG_IMAGEWIDTH, &w) || !TIFFGetField(tif, TIFFTAG_IMAGELENGTH, &h))
@@ -29,13 +27,11 @@ auto geotiff_source_t::load() -> bool
     TIFFClose(tif);
     return false;
   }
-  std::cout << "GeoTIFF: Dimensions: " << w << "x" << h << std::endl;
 
   m_width = w;
   m_height = h;
 
   // Read Georeferencing Tags - use defaults if not present
-  std::cout << "GeoTIFF: Reading georeferencing tags..." << std::endl;
 
   // Set safe defaults first
   m_scale_x = 1.0;
@@ -44,64 +40,126 @@ auto geotiff_source_t::load() -> bool
   m_origin_y = 0.0;
 
   // Read GeoTIFF tags safely using raw data access
-  std::cout << "GeoTIFF: Reading georeferencing tags..." << std::endl;
-
-  // Try reading ModelPixelScale (tag 33550) as raw data
-  std::cout << "GeoTIFF: Attempting to read ModelPixelScale..." << std::endl;
   uint32_t scale_count = 0;
-  void *scale_raw = nullptr;
-
-  // Get the tag as raw data
-  if (TIFFGetField(tif, 33550, &scale_count, &scale_raw) && scale_count >= 3 && scale_raw)
+  double *scales = nullptr;
+  if (TIFFGetField(tif, 33550, &scale_count, &scales) && scale_count >= 3 && scales)
   {
-    // It's an array of doubles
-    double *scales = (double *)scale_raw;
     m_scale_x = scales[0];
     m_scale_y = scales[1];
-    std::cout << "GeoTIFF: Scale: " << m_scale_x << ", " << m_scale_y << std::endl;
-  }
-  else
-  {
-    std::cout << "GeoTIFF: No ModelPixelScale, using defaults (1.0, 1.0)" << std::endl;
   }
 
-  // Try reading ModelTiepoint (tag 33922) as raw data
-  std::cout << "GeoTIFF: Attempting to read ModelTiepoint..." << std::endl;
   uint32_t tiepoint_count = 0;
   void *tiepoint_raw = nullptr;
-
   if (TIFFGetField(tif, 33922, &tiepoint_count, &tiepoint_raw) && tiepoint_count >= 6 && tiepoint_raw)
   {
-    // It's an array of doubles [I, J, K, X, Y, Z]
     double *tiepoints = (double *)tiepoint_raw;
-    m_origin_x = tiepoints[3]; // X
-    m_origin_y = tiepoints[4]; // Y
-    std::cout << "GeoTIFF: Origin: " << m_origin_x << ", " << m_origin_y << std::endl;
-  }
-  else
-  {
-    std::cout << "GeoTIFF: No ModelTiepoint, using defaults (0.0, 0.0)" << std::endl;
+    m_tie_i = tiepoints[0];
+    m_tie_j = tiepoints[1];
+    m_tie_k = tiepoints[2];
+    m_tie_x = tiepoints[3];
+    m_tie_y = tiepoints[4];
+    m_tie_z = tiepoints[5];
+
+    // Pixel (tie_i, tie_j) maps to (tie_x, tie_y)
+    m_origin_x = m_tie_x - m_tie_i * m_scale_x;
+    m_origin_y = m_tie_y + m_tie_j * m_scale_y; // Pixel J increases down, Projected Y increases up
   }
 
-  // Don't keep file open across threads - close it after reading metadata
-  // We'll reopen it on-demand for better thread safety
-  std::cout << "GeoTIFF: Closing file..." << std::endl;
+  // Detect CRS from GeoKeys
+  std::string epsg_code = "EPSG:32755"; // Default fallback (MGA 55S)
+  uint16_t *keys = nullptr;
+  uint32_t key_count = 0;
+  if (TIFFGetField(tif, 34735, &key_count, &keys) && keys)
+  {
+    // GeoKeyDirectory header: [Version, Rev, Minor, NumKeys]
+    if (key_count >= 4)
+    {
+      int num_keys = keys[3];
+      for (int i = 0; i < num_keys; ++i)
+      {
+        if (4 + i * 4 + 3 >= key_count)
+          break;
+
+        uint16_t key_id = keys[4 + i * 4];
+        uint16_t location = keys[5 + i * 4];
+        uint16_t count = keys[6 + i * 4];
+        uint16_t value_offset = keys[7 + i * 4];
+
+        if (key_id == 3072) // ProjectedCSTypeGeoKey
+        {
+          if (location == 0) // Value is in offset field
+            epsg_code = "EPSG:" + std::to_string(value_offset);
+        }
+      }
+    }
+  }
+
+  m_transformer = std::make_unique<crs_transformer_t>();
+  if (!m_transformer->init(epsg_code))
+  {
+    std::cerr << "GeoTIFF: Failed to init transformer for " << epsg_code << std::endl;
+  }
+
+  // --- Generate Visualization Thumbnail (512x512) ---
+  m_visual_width = std::min((int)w, 512);
+  m_visual_height = std::min((int)h, 512);
+  m_visual_data.assign(m_visual_width * m_visual_height, -1.0f);
+
+  float min_ele = 1e10f;
+  float max_ele = -1e10f;
+
+  for (int vy = 0; vy < m_visual_height; ++vy)
+  {
+    int sy = (int)((double)vy / m_visual_height * h);
+    float *buf = (float *)_TIFFmalloc(TIFFScanlineSize(tif));
+    if (TIFFReadScanline(tif, buf, sy) >= 0)
+    {
+      for (int vx = 0; vx < m_visual_width; ++vx)
+      {
+        int sx = (int)((double)vx / m_visual_width * w);
+        float val = buf[sx];
+        if (val > -1000.0f)
+        {
+          min_ele = std::min(min_ele, val);
+          max_ele = std::max(max_ele, val);
+        }
+        m_visual_data[vy * m_visual_width + vx] = val;
+      }
+    }
+    _TIFFfree(buf);
+  }
+
+  if (max_ele > min_ele)
+  {
+    for (auto &val : m_visual_data)
+    {
+      if (val > -1000.0f)
+        val = (val - min_ele) / (max_ele - min_ele);
+      else
+        val = -1.0f;
+    }
+  }
+
   TIFFClose(tif);
 
-  std::cout << "GeoTIFF: Setting m_loaded = true..." << std::endl;
   m_loaded = true;
-  std::cout << "Loaded GeoTIFF: " << m_path << " (" << m_width << "x" << m_height << ") [on-demand mode]" << std::endl;
   return true;
+}
+
+auto geotiff_source_t::get_visual_data(int &w, int &h) const -> const float *
+{
+  if (!m_loaded)
+    return nullptr;
+  w = m_visual_width;
+  h = m_visual_height;
+  return m_visual_data.data();
 }
 
 geotiff_source_t::geotiff_source_t(const std::filesystem::path &path) : m_path(path)
 {
-  // TEMPORARY: Synchronous load for debugging
-  load();
-
-  // Async load (disabled for debugging)
-  // m_load_future = std::async(std::launch::async, [this]() { return load(); });
-  // m_loading_started = true;
+  // Async load
+  m_load_future = std::async(std::launch::async, [this]() { return load(); });
+  m_loading_started = true;
 }
 
 geotiff_source_t::~geotiff_source_t()
@@ -144,76 +202,49 @@ auto geotiff_source_t::update() -> void
 
 auto geotiff_source_t::get_bounds(double &min_lat, double &max_lat, double &min_lon, double &max_lon) const -> bool
 {
-  if (!m_loaded)
+  double lats[4], lons[4];
+  if (!get_bounds_quad(lats, lons))
     return false;
 
-  // Get corners in projected coordinates
-  double x0 = m_origin_x;
-  double y0 = m_origin_y;
-  double x1 = m_origin_x + m_width * m_scale_x;
-  double y1 = m_origin_y - m_height * m_scale_y;
+  min_lat = 90.0;
+  max_lat = -90.0;
+  min_lon = 180.0;
+  max_lon = -180.0;
 
-  // Simple UTM Zone 55 to Lat/Lon conversion
-  // This is approximate but works for visualization
-  const double k0 = 0.9996;
-  const double e = 0.00669438;
-  const double e2 = e * e;
-  const double e3 = e2 * e;
-  const double e_p2 = e / (1.0 - e);
-  const double sqrt_e = sqrt(1 - e);
-  const double _e = (1 - sqrt_e) / (1 + sqrt_e);
-  const double _e2 = _e * _e;
-  const double _e3 = _e2 * _e;
-  const double _e4 = _e3 * _e;
-  const double _e5 = _e4 * _e;
-  const double M1 = (1 - e / 4 - 3 * e2 / 64 - 5 * e3 / 256);
-  const double M2 = (3 * e / 8 + 3 * e2 / 32 + 45 * e3 / 1024);
-  const double M3 = (15 * e2 / 256 + 45 * e3 / 1024);
-  const double M4 = (35 * e3 / 3072);
-  const double a = 6378137.0;
-  const double b = 6356752.314245;
-
-  auto utm_to_latlon = [&](double easting, double northing) -> std::pair<double, double>
+  for (int i = 0; i < 4; ++i)
   {
-    double x = easting - 500000.0;
-    // Southern Hemisphere: subtract from false northing
-    double y = northing - 10000000.0; // MGA Zone 55 is Southern Hemisphere
+    min_lat = std::min(min_lat, lats[i]);
+    max_lat = std::max(max_lat, lats[i]);
+    min_lon = std::min(min_lon, lons[i]);
+    max_lon = std::max(max_lon, lons[i]);
+  }
+  return true;
+}
 
-    double m = y / k0;
-    double mu = m / (a * M1);
+auto geotiff_source_t::get_bounds_quad(double *lats, double *lons) const -> bool
+{
+  if (!m_loaded || !m_transformer || !m_transformer->is_valid())
+    return false;
 
-    double phi1 = mu + M2 * sin(2 * mu) / M1 + M3 * sin(4 * mu) / M1 + M4 * sin(6 * mu) / M1;
-
-    double n = a / sqrt(1 - e * sin(phi1) * sin(phi1));
-    double t = tan(phi1) * tan(phi1);
-    double c = e_p2 * cos(phi1) * cos(phi1);
-    double a_val = x / (n * k0);
-    double a2 = a_val * a_val;
-    double a3 = a2 * a_val;
-    double a4 = a3 * a_val;
-    double a5 = a4 * a_val;
-    double a6 = a5 * a_val;
-
-    double lat_rad = phi1 - (n * tan(phi1) / n) * (a2 / 2 - (5 + 3 * t + 10 * c - 4 * c * c - 9 * e_p2) * a4 / 24 + (61 + 90 * t + 298 * c + 45 * t * t - 252 * e_p2 - 3 * c * c) * a6 / 720);
-
-    double lon_rad = (a_val - (1 + 2 * t + c) * a3 / 6 + (5 - 2 * c + 28 * t - 3 * c * c + 8 * e_p2 + 24 * t * t) * a5 / 120) / cos(phi1);
-
-    // Zone 55 central meridian
-    lon_rad += (55 * 6 - 183) * M_PI / 180.0;
-
-    return {lat_rad * 180.0 / M_PI, lon_rad * 180.0 / M_PI};
+  // Quad Corners (Easting, Northing)
+  double pts_x[4] = {
+      m_origin_x,                       // TL
+      m_origin_x + m_width * m_scale_x, // TR
+      m_origin_x + m_width * m_scale_x, // BR
+      m_origin_x                        // BL
+  };
+  double pts_y[4] = {
+      m_origin_y,                        // TL
+      m_origin_y,                        // TR
+      m_origin_y - m_height * m_scale_y, // BR
+      m_origin_y - m_height * m_scale_y  // BL
   };
 
-  auto [lat0, lon0] = utm_to_latlon(x0, y0);
-  auto [lat1, lon1] = utm_to_latlon(x1, y1);
-
-  min_lat = std::min(lat0, lat1);
-  max_lat = std::max(lat0, lat1);
-  min_lon = std::min(lon0, lon1);
-  max_lon = std::max(lon0, lon1);
-
-  std::cout << "GeoTIFF Bounds (UTM): (" << x0 << ", " << y0 << ") to (" << x1 << ", " << y1 << ")" << std::endl;
-  std::cout << "GeoTIFF Bounds (Lat/Lon): (" << min_lat << ", " << min_lon << ") to (" << max_lat << ", " << max_lon << ")" << std::endl;
+  for (int i = 0; i < 4; ++i)
+  {
+    if (!m_transformer->transform(pts_x[i], pts_y[i], lats[i], lons[i]))
+      return false;
+  }
 
   return true;
 }
@@ -289,31 +320,32 @@ auto geotiff_source_t::get_scanline(int row) -> const float *
 
 auto geotiff_source_t::get_elevation(double lat, double lon, float &out_height) -> bool
 {
-  if (!m_loaded)
+  if (!m_loaded || !m_transformer || !m_transformer->is_valid())
     return false;
 
-  // Inverse mapping: World -> Raster
-  // pixel_x = (lon - OriginX) / ScaleX
-  // pixel_y = (OriginY - lat) / ScaleY  (Assuming Top-Left origin, Y decreases down)
+  // Transform Lat/Lon -> Projected Coordinate (UTM)
+  double proj_x, proj_y;
+  if (!m_transformer->transform(lat, lon, proj_x, proj_y, false))
+    return false;
 
-  double px = (lon - m_origin_x) / m_scale_x;
-  double py = (m_origin_y - lat) / m_scale_y;
+  // Inverse mapping: Projected -> Raster
+  // projected_x = origin_x + pixel_x * scale_x  => pixel_x = (proj_x - origin_x) / scale_x
+  // projected_y = origin_y - pixel_y * scale_y  => pixel_y = (origin_y - proj_y) / scale_y
+
+  double px = (proj_x - m_origin_x) / m_scale_x;
+  double py = (m_origin_y - proj_y) / m_scale_y;
 
   int x = static_cast<int>(std::floor(px));
   int y = static_cast<int>(std::floor(py));
 
   if (x >= 0 && x < m_width && y >= 0 && y < m_height)
   {
-    // Get scanline (from cache or disk)
     const float *row_data = get_scanline(y);
     if (!row_data)
       return false;
 
-    // Read pixel value
     out_height = row_data[x];
-
-    // Check for nodata (often -9999 or extremely low/high values)
-    if (out_height < -10000.0f)
+    if (out_height < -1000.0f) // Nodata
       return false;
 
     return true;

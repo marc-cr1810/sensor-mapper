@@ -20,6 +20,18 @@ public:
     return false;
   }
 
+  // Get 4 corners precisely (lat, lon) in order: Top-Left, Top-Right, Bottom-Right, Bottom-Left
+  virtual auto get_bounds_quad(double *lats, double *lons) const -> bool
+  {
+    return false;
+  }
+
+  // Visualization helper: returns a grayscale elevation buffer (0.0 to 1.0) for a thumbnail
+  virtual auto get_visual_data(int &w, int &h) const -> const float *
+  {
+    return nullptr;
+  }
+
   // Name/Type of source
   virtual auto get_name() const -> const char * = 0;
 };

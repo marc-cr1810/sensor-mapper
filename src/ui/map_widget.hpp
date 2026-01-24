@@ -80,6 +80,15 @@ public:
     m_show_elevation_sources = show;
   }
 
+  auto get_show_raster_visual() const -> bool
+  {
+    return m_show_raster_visual;
+  }
+  auto set_show_raster_visual(bool show) -> void
+  {
+    m_show_raster_visual = show;
+  }
+
   auto get_show_heatmap_overlay() const -> bool
   {
     return m_show_heatmap_overlay;
@@ -214,6 +223,7 @@ private:
   bool m_show_composite = false;
   bool m_show_buildings = false;
   bool m_show_elevation_sources = false;
+  bool m_show_raster_visual = true;
   bool m_show_heatmap_overlay = true; // Show GPU-rendered coverage overlay
 
   float m_min_signal_dbm = -90.0f; // Minimum signal strength to display (dBm)
@@ -251,6 +261,14 @@ private:
   tdoa_result_t m_test_result;
 
   std::unique_ptr<tdoa_solver_t> m_tdoa_solver;
+
+  // Elevation Visualization Textures
+  struct source_texture_t
+  {
+    unsigned int id = 0;
+    int w = 0, h = 0;
+  };
+  std::map<const class elevation_source_t *, source_texture_t> m_source_textures;
 
   // Rendering helpers
   auto render_hyperbolas(const std::vector<sensor_t> &sensors, ImDrawList *draw_list, const ImVec2 &canvas_p0, const ImVec2 &canvas_sz) -> void;

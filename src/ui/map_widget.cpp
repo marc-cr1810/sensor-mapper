@@ -23,7 +23,7 @@
 namespace sensor_mapper
 {
 
-map_widget_t::map_widget_t() : m_center_lat(-33.8688), m_center_lon(151.2093), m_zoom(14.0), m_show_rf_gradient(false)
+map_widget_t::map_widget_t() : m_center_lat(-33.8688), m_center_lon(151.2093), m_zoom(14.0), m_show_rf_gradient(false), m_show_raster_visual(false)
 {
   m_tile_service = std::make_unique<tile_service_t>();
   m_building_service = std::make_unique<building_service_t>();
@@ -146,6 +146,12 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors, int &selected_inde
   if (ImGui::Checkbox("Show Elev. Sources", &show_elev))
   {
     set_show_elevation_sources(show_elev);
+  }
+  ImGui::SameLine();
+  bool show_raster = m_show_raster_visual;
+  if (ImGui::Checkbox("Show Raster Visual", &show_raster))
+  {
+    set_show_raster_visual(show_raster);
   }
 
   // Simple canvas
@@ -712,6 +718,100 @@ auto map_widget_t::draw(const std::vector<sensor_t> &sensors, int &selected_inde
         if (dx * dx + dy * dy < 100.0f)
         {
           selected_index = static_cast<int>(idx);
+        }
+      }
+    }
+  }
+
+  // --- Draw Elevation Source Visuals ---
+  if (m_show_elevation_sources && m_show_raster_visual)
+  {
+    const auto &sources = elevation_service.get_sources();
+    for (const auto &source : sources)
+    {
+      int vw, vh;
+      const float *vdata = source->get_visual_data(vw, vh);
+      if (vdata && vw > 0 && vh > 0)
+      {
+        // Get or Create Texture
+        auto &tex = m_source_textures[source.get()];
+        if (tex.id == 0 || tex.w != vw || tex.h != vh)
+        {
+          if (tex.id == 0)
+            glGenTextures(1, &tex.id);
+          glBindTexture(GL_TEXTURE_2D, tex.id);
+          glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+          glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+          glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+          glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+          // Convert float grayscale to RGBA8 for better compatibility and transparency
+          std::vector<uint32_t> rgba(vw * vh);
+          for (int i = 0; i < vw * vh; ++i)
+          {
+            float v = vdata[i];
+            if (v < -0.5f) // Nodata was set to -1.0f in geotiff_source.cpp
+            {
+              rgba[i] = 0x00000000; // Fully transparent
+            }
+            else
+            {
+              uint8_t c = (uint8_t)(v * 255.0f);
+              rgba[i] = 0xFF000000 | (c << 16) | (c << 8) | c;
+            }
+          }
+
+          glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, vw, vh, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
+          tex.w = vw;
+          tex.h = vh;
+        }
+
+        // Draw as image overlay (Precision QUAD rendering)
+        double corners_lat[4], corners_lon[4];
+        if (source->get_bounds_quad(corners_lat, corners_lon))
+        {
+          ImVec2 quad_pts[4];
+          for (int i = 0; i < 4; ++i)
+          {
+            double wx, wy;
+            geo::lat_lon_to_world(corners_lat[i], corners_lon[i], wx, wy);
+
+            // World Wrap relative to center
+            if (wx - center_wx > 0.5)
+              wx -= 1.0;
+            if (wx - center_wx < -0.5)
+              wx += 1.0;
+
+            quad_pts[i].x = static_cast<float>((wx - center_wx) * world_size_pixels + screen_center.x);
+            quad_pts[i].y = static_cast<float>((wy - center_wy) * world_size_pixels + screen_center.y);
+          }
+
+          // Order: TL, TR, BR, BL maps to UVs: (0,0), (1,0), (1,1), (0,1)
+          draw_list->AddImageQuad((ImTextureID)(intptr_t)tex.id, quad_pts[0], quad_pts[1], quad_pts[2], quad_pts[3], ImVec2(0, 0), ImVec2(1, 0), ImVec2(1, 1), ImVec2(0, 1), IM_COL32(255, 255, 255, 128));
+        }
+        else if (double min_lat, max_lat, min_lon, max_lon; source->get_bounds(min_lat, max_lat, min_lon, max_lon))
+        {
+          // Fallback to axis-aligned if quad not available
+          double min_wx, min_wy, max_wx, max_wy;
+          geo::lat_lon_to_world(max_lat, min_lon, min_wx, min_wy);
+          geo::lat_lon_to_world(min_lat, max_lon, max_wx, max_wy);
+
+          auto wrap = [&](double &v, double center)
+          {
+            if (v - center > 0.5)
+              v -= 1.0;
+            if (v - center < -0.5)
+              v += 1.0;
+          };
+          wrap(min_wx, center_wx);
+          wrap(max_wx, center_wx);
+
+          float x0 = static_cast<float>((min_wx - center_wx) * world_size_pixels + screen_center.x);
+          float y0 = static_cast<float>((min_wy - center_wy) * world_size_pixels + screen_center.y);
+          float x1 = static_cast<float>((max_wx - center_wx) * world_size_pixels + screen_center.x);
+          float y1 = static_cast<float>((max_wy - center_wy) * world_size_pixels + screen_center.y);
+
+          draw_list->AddImage((ImTextureID)(intptr_t)tex.id, ImVec2(x0, y0), ImVec2(x1, y1), ImVec2(0, 0), ImVec2(1, 1), IM_COL32(255, 255, 255, 128));
         }
       }
     }

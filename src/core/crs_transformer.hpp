@@ -17,7 +17,9 @@ public:
   auto init(const std::string &source_crs, const std::string &target_crs = "EPSG:4326") -> bool;
 
   // Transform coordinate. Returns true on success.
-  auto transform(double x, double y, double &out_x, double &out_y) const -> bool;
+  // forward = true: source -> target (usually UTM -> Lat/Lon)
+  // forward = false: target -> source (usually Lat/Lon -> UTM)
+  auto transform(double x, double y, double &out_x, double &out_y, bool forward = true) const -> bool;
 
   auto is_valid() const -> bool;
 
