@@ -7,6 +7,7 @@
 #include "core/elevation_service.hpp"
 #include "ui/map_widget.hpp"
 #include "ui/antenna_pattern_ui.hpp"
+#include "core/sensor_optimizer.hpp"
 
 namespace sensor_mapper
 {
@@ -29,12 +30,21 @@ private:
   void render_map_view_controls(map_widget_t &map);
   void render_elevation_data(elevation_service_t &elevation_service, map_widget_t &map);
   void render_tdoa_analysis(map_widget_t &map, const std::vector<sensor_t> &sensors);
+  void render_auto_placement(map_widget_t &map);
 
   // UI State
   bool m_show_sensor_config = true;
   bool m_show_map_view = true; // Still keep the window boolean just in case we use it, though we might simplify
   bool m_show_elevation_data = false;
   bool m_show_tdoa_analysis = true;
+  bool m_show_auto_placement = false;
+
+  // Optimization Settings
+  bool m_opt_use_buildings = true;
+  bool m_opt_use_terrain = true;
+  int m_opt_sensor_count = 4;
+
+  std::unique_ptr<sensor_optimizer_t> m_optimizer;
 };
 
 } // namespace sensor_mapper

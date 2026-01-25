@@ -106,6 +106,14 @@ auto map_widget_t::get_building_at_location(double lat, double lon) const -> dou
   return building ? building->height_m : 0.0;
 }
 
+auto map_widget_t::get_buildings_in_area(double min_lat, double max_lat, double min_lon, double max_lon) const -> std::vector<const building_t *>
+{
+  if (!m_building_service)
+    return {};
+
+  return m_building_service->get_buildings_in_area(min_lat, max_lat, min_lon, max_lon);
+}
+
 auto map_widget_t::fetch_buildings_near(double lat, double lon) -> void
 {
   if (!m_building_service)
@@ -114,6 +122,14 @@ auto map_widget_t::fetch_buildings_near(double lat, double lon) -> void
   // Fetch a small area around the point (approx +/- 0.005 degrees, ~500m)
   double delta = 0.005;
   m_building_service->fetch_buildings(lat - delta, lat + delta, lon - delta, lon + delta);
+}
+
+auto map_widget_t::fetch_buildings_in_area(double min_lat, double max_lat, double min_lon, double max_lon) -> void
+{
+  if (!m_building_service)
+    return;
+
+  m_building_service->fetch_buildings(min_lat, max_lat, min_lon, max_lon);
 }
 
 auto map_widget_t::draw(std::vector<sensor_t> &sensors, std::set<int> &selected_indices, elevation_service_t &elevation_service, std::function<void(double, double)> on_add_sensor) -> void
@@ -223,8 +239,39 @@ auto map_widget_t::draw(std::vector<sensor_t> &sensors, std::set<int> &selected_
     }
   }
 
-  // Right Click to Open Context Menu
-  if (is_hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right))
+  // --- Handle Polygon Drawing ---
+  if (m_is_drawing_polygon && is_hovered)
+  {
+    if (ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+    {
+      // Check for closing the polygon (click near the first point)
+      bool closed = false;
+      if (!m_target_polygon.empty())
+      {
+        ImVec2 first_p = lat_lon_to_screen(m_target_polygon.front().first, m_target_polygon.front().second, canvas_p0, canvas_sz);
+        ImVec2 mouse_p = ImGui::GetMousePos();
+        float dist_sq = (first_p.x - mouse_p.x) * (first_p.x - mouse_p.x) + (first_p.y - mouse_p.y) * (first_p.y - mouse_p.y);
+
+        if (m_target_polygon.size() >= 3 && dist_sq < 15.0f * 15.0f) // 15px radius
+        {
+          m_is_drawing_polygon = false; // Closed!
+          closed = true;
+        }
+      }
+
+      if (!closed)
+      {
+        m_target_polygon.push_back({m_mouse_lat, m_mouse_lon});
+      }
+    }
+    if (ImGui::IsMouseClicked(ImGuiMouseButton_Right))
+    {
+      m_is_drawing_polygon = false;
+    }
+  }
+
+  // Right Click to Open Context Menu (Disable if drawing polygon)
+  if (is_hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Right) && !m_is_drawing_polygon)
   {
     ImVec2 mouse_pos = io.MousePos;
     double mx = center_wx + (mouse_pos.x - (canvas_p0.x + canvas_sz.x * 0.5f)) / world_size_pixels;
@@ -597,6 +644,42 @@ auto map_widget_t::draw(std::vector<sensor_t> &sensors, std::set<int> &selected_
         }
       }
     }
+  }
+
+  // --- Draw Target Polygon ---
+  if (!m_target_polygon.empty())
+  {
+    std::vector<ImVec2> points;
+    for (const auto &p : m_target_polygon)
+    {
+      points.push_back(lat_lon_to_screen(p.first, p.second, canvas_p0, canvas_sz));
+    }
+
+    if (points.size() > 1)
+    {
+      for (size_t i = 0; i < points.size() - 1; ++i)
+      {
+        draw_list->AddLine(points[i], points[i + 1], IM_COL32(0, 255, 0, 255), 2.0f);
+      }
+      if (!m_is_drawing_polygon && points.size() > 2)
+      {
+        draw_list->AddLine(points.back(), points.front(), IM_COL32(0, 255, 0, 255), 2.0f);
+        draw_list->AddConvexPolyFilled(points.data(), points.size(), IM_COL32(0, 255, 0, 40));
+      }
+    }
+
+    for (const auto &p : points)
+    {
+      draw_list->AddCircleFilled(p, 4.0f, IM_COL32(0, 255, 0, 255));
+    }
+  }
+
+  // Draw Line to Mouse if Drawing
+  if (m_is_drawing_polygon && !m_target_polygon.empty())
+  {
+    ImVec2 last_p = lat_lon_to_screen(m_target_polygon.back().first, m_target_polygon.back().second, canvas_p0, canvas_sz);
+    ImVec2 mouse_p = ImGui::GetMousePos();
+    draw_list->AddLine(last_p, mouse_p, IM_COL32(0, 255, 0, 180), 1.5f);
   }
 
   // --- Draw All Sensors ---
@@ -2391,6 +2474,63 @@ auto map_widget_t::export_coverage_map(const std::string &path) -> bool
     return false;
 
   return image_exporter_t::save_texture_to_png(m_heatmap_texture_id, m_rf_engine->get_width(), m_rf_engine->get_height(), path);
+}
+
+auto map_widget_t::lat_lon_to_screen(double lat, double lon, const ImVec2 &canvas_p0, const ImVec2 &canvas_sz) const -> ImVec2
+{
+  double wx, wy;
+  geo::lat_lon_to_world(lat, lon, wx, wy);
+
+  double center_wx, center_wy;
+  geo::lat_lon_to_world(m_center_lat, m_center_lon, center_wx, center_wy);
+
+  // Wrap adjustments relative to center
+  if (wx - center_wx > 0.5)
+    wx -= 1.0;
+  if (wx - center_wx < -0.5)
+    wx += 1.0;
+
+  const double tile_size = 256.0;
+  double n = std::pow(2.0, m_zoom);
+  double world_size_pixels = n * tile_size;
+
+  ImVec2 screen_center = ImVec2(canvas_p0.x + canvas_sz.x * 0.5f, canvas_p0.y + canvas_sz.y * 0.5f);
+  float px = static_cast<float>((wx - center_wx) * world_size_pixels + screen_center.x);
+  float py = static_cast<float>((wy - center_wy) * world_size_pixels + screen_center.y);
+
+  return ImVec2(px, py);
+}
+
+auto map_widget_t::screen_to_lat_lon(const ImVec2 &p, const ImVec2 &canvas_p0, const ImVec2 &canvas_sz, double &lat_out, double &lon_out) const -> void
+{
+  double center_wx, center_wy;
+  geo::lat_lon_to_world(m_center_lat, m_center_lon, center_wx, center_wy);
+
+  const double tile_size = 256.0;
+  double n = std::pow(2.0, m_zoom);
+  double world_size_pixels = n * tile_size;
+
+  ImVec2 screen_center = ImVec2(canvas_p0.x + canvas_sz.x * 0.5f, canvas_p0.y + canvas_sz.y * 0.5f);
+
+  double dx = (p.x - screen_center.x) / world_size_pixels;
+  double dy = (p.y - screen_center.y) / world_size_pixels;
+
+  double wx = center_wx + dx;
+  double wy = center_wy + dy;
+
+  // Wrap X
+  if (wx < 0.0)
+    wx = std::fmod(wx, 1.0) + 1.0;
+  if (wx > 1.0)
+    wx = std::fmod(wx, 1.0);
+
+  // Clamp Y
+  if (wy < 0.0)
+    wy = 0.0;
+  if (wy > 1.0)
+    wy = 1.0;
+
+  geo::world_to_lat_lon(wx, wy, lat_out, lon_out);
 }
 
 } // namespace sensor_mapper

@@ -150,6 +150,8 @@ set(SOURCES_CORE
   src/core/sensor.hpp
   src/core/tdoa_solver.cpp
   src/core/tdoa_solver.hpp
+  src/core/sensor_optimizer.cpp
+  src/core/sensor_optimizer.hpp
   src/core/tile_service.cpp
   src/core/tile_service.hpp
   src/core/terrarium_source.cpp

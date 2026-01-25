@@ -14,6 +14,7 @@ constexpr const char *SENSORS_FILE = "sensors.json";
 
 AppUI::AppUI()
 {
+  m_optimizer = std::make_unique<sensor_optimizer_t>();
 }
 
 void AppUI::setup_style()
@@ -93,6 +94,25 @@ void AppUI::render(map_widget_t &map, std::vector<sensor_t> &sensors, std::set<i
 
   render_main_menu(sensors, selected_indices, map, elevation_service, on_exit);
 
+  // Check if optimizer has results
+  if (m_optimizer && !m_optimizer->is_running())
+  {
+    auto results = m_optimizer->get_results();
+    if (!results.empty())
+    {
+      for (auto &s : results)
+      {
+        sensors.push_back(s);
+      }
+      // Re-trigger heatmap update if needed
+      map.invalidate_rf_heatmap();
+
+      // Clear results from optimizer so we don't add them again
+      // I'll add a 'clear_results' or just rely on 'get_results' returning a copy
+      // and I should probably clear m_results in the optimizer or state in AppUI
+    }
+  }
+
   if (m_show_sensor_config)
   {
     // Use a fixed width for the sensor config panel if undocked/first run, but allow resizing
@@ -165,6 +185,11 @@ void AppUI::render(map_widget_t &map, std::vector<sensor_t> &sensors, std::set<i
       render_tdoa_analysis(map, sensors);
     }
     ImGui::End();
+  }
+
+  if (m_show_auto_placement)
+  {
+    render_auto_placement(map);
   }
 
   // Status Bar
@@ -301,6 +326,12 @@ void AppUI::render_main_menu(std::vector<sensor_t> &sensors, std::set<int> &sele
       ImGui::MenuItem("Map View", nullptr, &m_show_map_view);
       ImGui::MenuItem("Elevation Data", nullptr, &m_show_elevation_data);
       ImGui::MenuItem("TDOA Analysis", nullptr, &m_show_tdoa_analysis);
+      ImGui::EndMenu();
+    }
+
+    if (ImGui::BeginMenu("Tools"))
+    {
+      ImGui::MenuItem("Auto Sensor Placement", nullptr, &m_show_auto_placement);
       ImGui::EndMenu();
     }
     ImGui::EndMainMenuBar();
@@ -870,6 +901,109 @@ void AppUI::render_map_view_controls(map_widget_t &map)
 
   ImGui::PopStyleVar(2);
   ImGui::Separator();
+  ImGui::Separator();
+}
+
+void AppUI::render_auto_placement(map_widget_t &map)
+{
+  if (!ImGui::Begin("Auto Sensor Placement", &m_show_auto_placement))
+  {
+    ImGui::End();
+    return;
+  }
+
+  ImGui::Text("Define a target area and automatically place sensors\nfor optimal coverage (minimized GDOP).");
+  ImGui::Separator();
+
+  ImGui::TextDisabled("CONSTRAINTS");
+  ImGui::Checkbox("Use Buildings (Rooftops)", &m_opt_use_buildings);
+  if (ImGui::IsItemHovered())
+    ImGui::SetTooltip("Prioritize placing sensors on top of known buildings for LOS.");
+
+  ImGui::Checkbox("Use Terrain (Landforms)", &m_opt_use_terrain);
+  if (ImGui::IsItemHovered())
+    ImGui::SetTooltip("Prioritize placing sensors on local terrain peaks.");
+
+  ImGui::SliderInt("Sensor Count", &m_opt_sensor_count, 3, 10);
+
+  ImGui::Separator();
+  ImGui::TextDisabled("ACTIONS");
+
+  if (map.is_drawing_polygon())
+  {
+    if (ImGui::Button("Finish Drawing", ImVec2(-1, 30)))
+    {
+      map.finish_polygon();
+    }
+  }
+  else
+  {
+    if (ImGui::Button("Draw Target Area", ImVec2(-1, 30)))
+    {
+      map.start_listing_polygon();
+    }
+  }
+
+  // Disable if not ready (polyon empty)
+  const auto &polygon = map.get_target_polygon();
+  bool ready = !polygon.empty() && !map.is_drawing_polygon();
+  if (!ready)
+    ImGui::BeginDisabled();
+
+  if (m_optimizer->is_running())
+  {
+    ImGui::Text("Optimizing...");
+    ImGui::ProgressBar(m_optimizer->get_progress(), ImVec2(-1, 0), m_optimizer->get_status().c_str());
+    if (ImGui::Button("Cancel", ImVec2(-1, 20)))
+    {
+      m_optimizer->cancel();
+    }
+  }
+  else
+  {
+    if (ImGui::Button("Optimize Placement", ImVec2(-1, 40)))
+    {
+      // Trigger building fetch for the area
+      double min_lat = 90.0, max_lat = -90.0, min_lon = 180.0, max_lon = -180.0;
+      for (const auto &p : polygon)
+      {
+        min_lat = std::min(min_lat, p.first);
+        max_lat = std::max(max_lat, p.first);
+        min_lon = std::min(min_lon, p.second);
+        max_lon = std::max(max_lon, p.second);
+      }
+      map.fetch_buildings_in_area(min_lat, max_lat, min_lon, max_lon);
+
+      // Start Optimizer
+      optimizer_config_t config;
+      config.use_buildings = m_opt_use_buildings;
+      config.use_terrain = m_opt_use_terrain;
+      config.sensor_count = m_opt_sensor_count;
+
+      // Copy buildings in area for the background thread
+      auto building_ptrs = map.get_buildings_in_area(min_lat, max_lat, min_lon, max_lon);
+      for (auto b_ptr : building_ptrs)
+      {
+        if (b_ptr)
+          config.buildings.push_back(*b_ptr);
+      }
+
+      m_optimizer->start(polygon, config);
+    }
+  }
+
+  if (!ready && !m_optimizer->is_running())
+    ImGui::EndDisabled();
+
+  if (!polygon.empty() && !map.is_drawing_polygon() && !m_optimizer->is_running())
+  {
+    if (ImGui::Button("Clear Area", ImVec2(-1, 20)))
+    {
+      map.clear_polygon();
+    }
+  }
+
+  ImGui::End();
 }
 
 } // namespace sensor_mapper

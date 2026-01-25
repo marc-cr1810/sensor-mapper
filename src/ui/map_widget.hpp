@@ -29,6 +29,8 @@ public:
 
   auto get_building_at_location(double lat, double lon) const -> double; // Returns height or 0
   auto fetch_buildings_near(double lat, double lon) -> void;
+  auto fetch_buildings_in_area(double min_lat, double max_lat, double min_lon, double max_lon) -> void;
+  auto get_buildings_in_area(double min_lat, double max_lat, double min_lon, double max_lon) const -> std::vector<const building_t *>;
 
   auto set_center(double lat, double lon) -> void;
   auto get_center_lat() const -> double
@@ -41,10 +43,9 @@ public:
   }
 
   auto set_zoom(double zoom) -> void;
-
-  auto set_map_source(int source_index) -> void;
-
   auto get_zoom() const -> double;
+  auto set_map_source(int source_index) -> void;
+  auto get_map_source() const -> int;
 
   auto get_mouse_lat() const -> double
   {
@@ -114,8 +115,6 @@ public:
     }
   }
 
-  auto get_map_source() const -> int;
-
   auto export_coverage_map(const std::string &path) -> bool;
 
   auto get_show_heatmap_overlay() const -> bool
@@ -135,16 +134,14 @@ public:
   auto set_min_signal_dbm(float dbm) -> void
   {
     m_min_signal_dbm = dbm;
-    m_heatmap_dirty = true; // Trigger re-render with new threshold
+    m_heatmap_dirty = true;
   }
 
-  // Mark the RF heatmap as dirty to trigger re-render
   auto invalidate_rf_heatmap() -> void
   {
     m_heatmap_dirty = true;
   }
 
-  // TDOA visualization controls
   auto get_show_tdoa_analysis() const -> bool
   {
     return m_show_tdoa_analysis;
@@ -185,7 +182,6 @@ public:
   auto set_tdoa_test_point(double lat, double lon) -> void;
   auto get_tdoa_test_result() const -> const tdoa_result_t &
   {
-    // Default to 2D for backward compatibility if needed, or renamed to explicit 2d in UI refactor
     return m_test_result_2d;
   }
   auto get_tdoa_test_result_3d() const -> const tdoa_result_t &
@@ -199,6 +195,29 @@ public:
   auto clear_tdoa_test_point() -> void
   {
     m_has_test_point = false;
+  }
+
+  // Polygon Drawing
+  auto start_listing_polygon() -> void
+  {
+    m_is_drawing_polygon = true;
+    m_target_polygon.clear();
+  }
+  auto finish_polygon() -> void
+  {
+    m_is_drawing_polygon = false;
+  }
+  auto clear_polygon() -> void
+  {
+    m_target_polygon.clear();
+  }
+  auto get_target_polygon() const -> const std::vector<std::pair<double, double>> &
+  {
+    return m_target_polygon;
+  }
+  auto is_drawing_polygon() const -> bool
+  {
+    return m_is_drawing_polygon;
   }
 
   auto get_timing_jitter_ns() const -> float
@@ -250,60 +269,55 @@ public:
   }
 
 private:
+  auto lat_lon_to_screen(double lat, double lon, const ImVec2 &canvas_p0, const ImVec2 &canvas_sz) const -> ImVec2;
+  auto screen_to_lat_lon(const ImVec2 &p, const ImVec2 &canvas_p0, const ImVec2 &canvas_sz, double &lat_out, double &lon_out) const -> void;
+
   double m_center_lat;
   double m_center_lon;
-  double m_zoom; // Double for smooth zoom
+  double m_zoom;
 
   double m_mouse_lat = 0.0;
   double m_mouse_lon = 0.0;
 
-  // Tool State
   tool_state_t m_tool_state = tool_state_t::Navigate;
 
-  // Path Profile State
   bool m_show_profile_window = false;
   geo_point_t m_profile_a = {0.0, 0.0};
   bool m_has_profile_a = false;
   geo_point_t m_profile_b = {0.0, 0.0};
   bool m_has_profile_b = false;
 
-  bool m_show_rf_gradient; // Show RF signal strength gradient (default: off)
+  bool m_show_rf_gradient;
   bool m_show_composite = false;
   bool m_show_buildings = false;
   bool m_show_elevation_sources = false;
   bool m_show_raster_visual = false;
-  int m_viz_mode = 0;                 // 0=Heatmap, 1=Overlap
-  bool m_show_heatmap_overlay = true; // Show GPU-rendered coverage overlay
+  int m_viz_mode = 0;
+  bool m_show_heatmap_overlay = true;
 
-  float m_min_signal_dbm = -90.0f; // Minimum signal strength to display (dBm)
-
-  // Smooth zoom/pan state (placeholder for now, using direct integers)
+  float m_min_signal_dbm = -90.0f;
 
   struct cached_view_t
   {
     std::string hash_key;
-    std::vector<ImVec2> points;     // Lat/Lon coordinates
-    std::vector<double> signal_dbm; // Pre-calculated signal strength (dBm)
+    std::vector<ImVec2> points;
+    std::vector<double> signal_dbm;
   };
   std::map<std::string, cached_view_t> m_view_cache;
 
   std::unique_ptr<tile_service_t> m_tile_service;
   std::unique_ptr<building_service_t> m_building_service;
 
-  // RF Engine
   std::unique_ptr<class gpu_rf_engine_t> m_rf_engine;
-  // We don't need async futures anymore, GPU is immediate(ish)
   unsigned int m_heatmap_texture_id = 0;
   bool m_heatmap_dirty = true;
 
-  // TDOA visualization state
   bool m_show_tdoa_analysis = false;
   bool m_show_hyperbolas = true;
   bool m_show_gdop_contours = false;
   bool m_show_accuracy_heatmap = false;
-  float m_timing_jitter_ns = 10.0f; // Default GPS-disciplined timing
+  float m_timing_jitter_ns = 10.0f;
 
-  // Test point state
   bool m_has_test_point = false;
   double m_test_point_lat = 0.0;
   double m_test_point_lon = 0.0;
@@ -312,9 +326,8 @@ private:
 
   std::unique_ptr<tdoa_solver_t> m_tdoa_solver;
 
-  float m_target_alt_agl = 50.0f; // Default drone flight altitude
+  float m_target_alt_agl = 50.0f;
 
-  // Elevation Visualization Textures
   struct source_texture_t
   {
     unsigned int id = 0;
@@ -322,7 +335,6 @@ private:
   };
   std::map<const class elevation_source_t *, source_texture_t> m_source_textures;
 
-  // Rendering helpers
   auto render_hyperbolas(const std::vector<sensor_t> &sensors, ImDrawList *draw_list, const ImVec2 &canvas_p0, const ImVec2 &canvas_sz) -> void;
   auto render_gdop_contours(const std::vector<sensor_t> &sensors, ImDrawList *draw_list, const ImVec2 &canvas_p0, const ImVec2 &canvas_sz) -> void;
   auto render_accuracy_heatmap(const std::vector<sensor_t> &sensors, ImDrawList *draw_list, const ImVec2 &canvas_p0, const ImVec2 &canvas_sz) -> void;
@@ -330,7 +342,6 @@ private:
 
   auto draw_path_profile_window(elevation_service_t &elevation_service) -> void;
 
-  // View State (Refactored from statics)
   double m_prev_min_lat = 0.0;
   double m_prev_max_lat = 0.0;
   double m_prev_min_lon = 0.0;
@@ -342,16 +353,17 @@ private:
   double m_cached_render_min_lon = 0.0;
   double m_cached_render_max_lon = 0.0;
 
-  double m_cursor_alt = 0.0;    // Cached cursor altitude for display
-  int m_current_map_source = 0; // Current map source selection
+  double m_cursor_alt = 0.0;
+  int m_current_map_source = 0;
 
-  // Context Menu State
   double m_ctx_lat = 0.0;
   double m_ctx_lon = 0.0;
 
-  // Interaction State
   int m_dragging_sensor_index = -1;
   std::optional<geo_point_t> m_profile_hover_pos;
+
+  bool m_is_drawing_polygon = false;
+  std::vector<std::pair<double, double>> m_target_polygon;
 };
 
 } // namespace sensor_mapper

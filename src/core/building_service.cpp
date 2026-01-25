@@ -286,8 +286,9 @@ auto building_service_t::get_buildings_in_area(double min_lat, double max_lat, d
   std::vector<const building_t *> result;
 
   // Determine grid cells covering the area
-  auto start_key = m_impl->get_grid_key(min_lat, min_lon);
-  auto end_key = m_impl->get_grid_key(max_lat, max_lon);
+  // Expand search by 1 grid cell in each direction to catch buildings that cross boundaries
+  auto start_key = m_impl->get_grid_key(min_lat - GRID_CELL_SIZE, min_lon - GRID_CELL_SIZE);
+  auto end_key = m_impl->get_grid_key(max_lat + GRID_CELL_SIZE, max_lon + GRID_CELL_SIZE);
 
   for (int lat_idx = start_key.first; lat_idx <= end_key.first; ++lat_idx)
   {
@@ -300,12 +301,21 @@ auto building_service_t::get_buildings_in_area(double min_lat, double max_lat, d
       for (size_t idx : it->second)
       {
         const auto &building = m_impl->buildings[idx];
-        // Bounding box check
         if (building.footprint.empty())
           continue;
 
-        const auto &pt = building.footprint[0];
-        if (pt.lat >= min_lat && pt.lat <= max_lat && pt.lon >= min_lon && pt.lon <= max_lon)
+        // Check if ANY point of footprint is within the bbox
+        bool in_bbox = false;
+        for (const auto &pt : building.footprint)
+        {
+          if (pt.lat >= min_lat && pt.lat <= max_lat && pt.lon >= min_lon && pt.lon <= max_lon)
+          {
+            in_bbox = true;
+            break;
+          }
+        }
+
+        if (in_bbox)
         {
           result.push_back(&building);
         }
