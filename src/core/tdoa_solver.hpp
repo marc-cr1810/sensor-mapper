@@ -27,9 +27,10 @@ struct tdoa_result_t
 {
   double latitude = 0.0;
   double longitude = 0.0;
+  double altitude = 0.0;                       // Altitude in meters
   double error_estimate_m = 0.0;               // Estimated positioning error in meters
   double gdop = 0.0;                           // Geometric dilution of precision
-  std::vector<std::vector<double>> covariance; // 2x2 Covariance matrix for error ellipse
+  std::vector<std::vector<double>> covariance; // 3x3 Covariance matrix for error ellipse
   bool converged = false;                      // Whether solver converged
   int iterations = 0;                          // Number of solver iterations
 };
@@ -42,35 +43,45 @@ public:
 
   // Solve TDOA positioning from time measurements
   // tdoa_ns: Time differences in nanoseconds relative to first sensor
-  // initial_lat/lon: Initial guess for iterative solver
-  auto solve_position(const std::vector<sensor_t> &sensors, const std::vector<double> &tdoa_ns, double initial_lat, double initial_lon) -> tdoa_result_t;
+  // initial_lat/lon/alt: Initial guess for iterative solver
+  auto solve_position(const std::vector<sensor_t> &sensors, const std::vector<double> &tdoa_ns, double initial_lat, double initial_lon, double initial_alt) -> tdoa_result_t;
 
   // Calculate TDOA values for a known position (for testing/simulation)
   // Returns time differences in nanoseconds relative to first sensor
-  auto calculate_tdoa(const std::vector<sensor_t> &sensors, double target_lat, double target_lon) const -> std::vector<double>;
+  auto calculate_tdoa(const std::vector<sensor_t> &sensors, double target_lat, double target_lon, double target_alt) const -> std::vector<double>;
 
-  // Calculate GDOP (Geometric Dilution of Precision) at a specific location
-  // Lower GDOP = better geometry, typically < 3 is good, > 10 is poor
-  auto calculate_gdop(const std::vector<sensor_t> &sensors, double lat, double lon) const -> double;
+  // Calculate GDOP (Geometic Dilution of Precision) - 3D
+  auto calculate_gdop(const std::vector<sensor_t> &sensors, double lat, double lon, double alt) const -> double;
 
-  // Estimate expected positioning error at a location
-  // timing_jitter_ns: RMS timing measurement error (GPS-disciplined: ~10ns, typical: 50ns)
-  auto estimate_positioning_error(const std::vector<sensor_t> &sensors, double lat, double lon, double timing_jitter_ns = 10.0) const -> double;
+  // Calculate 2D GDOP (Horizontal Dilution of Precision) assuming fixed altitude
+  // Use this for map visualization when sensors might be coplanar (where 3D GDOP is infinite)
+  auto calculate_2d_gdop(const std::vector<sensor_t> &sensors, double lat, double lon, double fixed_alt) const -> double;
 
-  // Sample points along a hyperbola for visualization
+  // Estimate expected positioning error at a location (3D)
+  auto estimate_positioning_error(const std::vector<sensor_t> &sensors, double lat, double lon, double alt, double timing_jitter_ns = 10.0) const -> double;
+
+  // Estimate expected positioning error (2D/Horizontal)
+  auto estimate_2d_positioning_error(const std::vector<sensor_t> &sensors, double lat, double lon, double fixed_alt, double timing_jitter_ns = 10.0) const -> double;
+
+  // Solve TDOA positioning (2D - Fixed Altitude)
+  // Useful when sensors are coplanar or we only care about Lat/Lon
+  auto solve_position_2d(const std::vector<sensor_t> &sensors, const std::vector<double> &tdoa_ns, double initial_lat, double initial_lon, double fixed_alt) -> tdoa_result_t;
+
+  // Sample points along a hyperbola for visualization (2D slice at specific altitude)
   // Returns lat/lon points along the hyperbola representing constant TDOA between two sensors
-  auto sample_hyperbola(const sensor_t &sensor1, const sensor_t &sensor2, double tdoa_ns, int num_samples = 100) const -> std::vector<std::pair<double, double>>;
+  auto sample_hyperbola(const sensor_t &sensor1, const sensor_t &sensor2, double tdoa_ns, double slice_alt_m, int num_samples = 100) const -> std::vector<std::pair<double, double>>;
 
 private:
-  // Calculate distance from a point to a sensor in meters
-  auto calculate_distance(const sensor_t &sensor, double lat, double lon) const -> double;
+  // Calculate distance from a point to a sensor in meters (3D)
+  auto calculate_distance(const sensor_t &sensor, double lat, double lon, double alt) const -> double;
 
   // Calculate Jacobian matrix for TDOA positioning (for least-squares)
-  auto calculate_jacobian(const std::vector<sensor_t> &sensors, double lat, double lon) const -> std::vector<std::vector<double>>;
+  auto calculate_jacobian(const std::vector<sensor_t> &sensors, double lat, double lon, double alt) const -> std::vector<std::vector<double>>;
 
   // Matrix operations for least squares solver
   auto matrix_transpose(const std::vector<std::vector<double>> &matrix) const -> std::vector<std::vector<double>>;
   auto matrix_multiply(const std::vector<std::vector<double>> &a, const std::vector<std::vector<double>> &b) const -> std::vector<std::vector<double>>;
+  auto matrix_inverse_3x3(const std::vector<std::vector<double>> &matrix) const -> std::optional<std::vector<std::vector<double>>>;
   auto matrix_inverse_2x2(const std::vector<std::vector<double>> &matrix) const -> std::optional<std::vector<std::vector<double>>>;
 };
 

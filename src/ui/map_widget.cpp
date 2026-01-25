@@ -10,6 +10,7 @@
 
 #include "imgui_impl_opengl3.h"
 #include "../renderer/gpu_rf_engine.hpp" // GPU Engine
+#include "../core/rf_models.hpp"         // RF Models
 #include <random>
 
 #include <algorithm>
@@ -1101,12 +1102,12 @@ auto map_widget_t::draw(std::vector<sensor_t> &sensors, std::set<int> &selected_
             double path_loss_db = 0.0;
             if (prop_model == PropagationModel::FreeSpace)
             {
-              path_loss_db = rf_engine_t::calculate_fspl(d_km, frequency_mhz);
+              path_loss_db = rf_models::calculate_fspl(d_km, frequency_mhz);
             }
             else
             {
               // Assume 2m receiver height
-              path_loss_db = rf_engine_t::calculate_hata(d_km, frequency_mhz, sensor_h, 2.0, prop_model);
+              path_loss_db = rf_models::calculate_hata(d_km, frequency_mhz, sensor_h, 2.0, prop_model);
             }
 
             // Calculate terrain attenuation
@@ -1235,11 +1236,11 @@ auto map_widget_t::draw(std::vector<sensor_t> &sensors, std::set<int> &selected_
           double path_loss_db = 0.0;
           if (prop_model == PropagationModel::FreeSpace)
           {
-            path_loss_db = rf_engine_t::calculate_fspl(d_km, frequency_mhz);
+            path_loss_db = rf_models::calculate_fspl(d_km, frequency_mhz);
           }
           else
           {
-            path_loss_db = rf_engine_t::calculate_hata(d_km, frequency_mhz, sensor_h, 2.0, prop_model);
+            path_loss_db = rf_models::calculate_hata(d_km, frequency_mhz, sensor_h, 2.0, prop_model);
           }
 
           // Quick terrain loss (simplified for edge points)
@@ -1589,7 +1590,7 @@ auto map_widget_t::render_hyperbolas(const std::vector<sensor_t> &sensors, ImDra
     return;
 
   // Calculate TDOA for the test point
-  auto test_tdoa = m_tdoa_solver->calculate_tdoa(sensors, m_test_point_lat, m_test_point_lon);
+  auto test_tdoa = m_tdoa_solver->calculate_tdoa(sensors, m_test_point_lat, m_test_point_lon, 0.0);
 
   // Transform coordinates to screen space lambda
   auto latlon_to_screen = [&](double lat, double lon) -> ImVec2
@@ -1629,7 +1630,7 @@ auto map_widget_t::render_hyperbolas(const std::vector<sensor_t> &sensors, ImDra
       double tdoa_ns = test_tdoa[i] - test_tdoa[j];
 
       // Sample hyperbola points
-      auto points = m_tdoa_solver->sample_hyperbola(sensors[i], sensors[j], tdoa_ns, 200);
+      auto points = m_tdoa_solver->sample_hyperbola(sensors[i], sensors[j], tdoa_ns, 0.0, 200);
 
       if (points.size() < 2)
         continue;
@@ -1714,7 +1715,8 @@ auto map_widget_t::render_gdop_contours(const std::vector<sensor_t> &sensors, Im
         geo::world_to_lat_lon(wx, wy, lat, lon);
         if (lat >= min_lat && lat <= max_lat && lon >= min_lon && lon <= max_lon)
         {
-          gdop_grid[y * (cols + 1) + x] = m_tdoa_solver->calculate_gdop(sensors, lat, lon);
+          // Use 2D GDOP assuming fixed altitude at 0.0 (or terrain if available, but 2D model assumes fixed plane)
+          gdop_grid[y * (cols + 1) + x] = m_tdoa_solver->calculate_2d_gdop(sensors, lat, lon, 0.0);
           valid = true;
         }
       }
@@ -1935,7 +1937,8 @@ auto map_widget_t::render_accuracy_heatmap(const std::vector<sensor_t> &sensors,
         geo::world_to_lat_lon(wx, wy, lat, lon);
         if (should_render(lat, lon))
         {
-          errors_grid[y * (cols + 1) + x] = m_tdoa_solver->estimate_positioning_error(sensors, lat, lon, jitter);
+          // Use 2D Positioning Error
+          errors_grid[y * (cols + 1) + x] = m_tdoa_solver->estimate_2d_positioning_error(sensors, lat, lon, 0.0, jitter);
         }
         else
         {
@@ -2035,7 +2038,7 @@ auto map_widget_t::render_test_point(const std::vector<sensor_t> &sensors, ImDra
   if (sensors.size() >= 3 && m_tdoa_solver)
   {
     // 1. Calculate ideal TDOAs
-    auto ideal_tdoa = m_tdoa_solver->calculate_tdoa(sensors, m_test_point_lat, m_test_point_lon);
+    auto ideal_tdoa = m_tdoa_solver->calculate_tdoa(sensors, m_test_point_lat, m_test_point_lon, 0.0);
 
     // 1b. Inject Synthetic Noise (Jitter)
     // To visualize the "Estimated" point wandering, we add random timing error.
@@ -2055,10 +2058,14 @@ auto map_widget_t::render_test_point(const std::vector<sensor_t> &sensors, ImDra
     }
 
     // 2. Solve (Verify Geometry) with NOISY data
-    tdoa_result_t result = m_tdoa_solver->solve_position(sensors, noisy_tdoa, m_test_point_lat, m_test_point_lon);
+    // 2. Solve (Verify Geometry) with NOISY data - Use 2D Solver for consistency with map view
+    // Fix altitude to test point altitude (if we had it, otherwise 0.0)
+    // Actually, solve_position_2d requires initial lat/lon/alt. Fixed Alt = 0.0
+    tdoa_result_t result = m_tdoa_solver->solve_position_2d(sensors, noisy_tdoa, m_test_point_lat, m_test_point_lon, 0.0);
 
     // 3. Update Error Estimate
-    result.error_estimate_m = m_tdoa_solver->estimate_positioning_error(sensors, m_test_point_lat, m_test_point_lon, jitter_ns);
+    // 3. Update Error Estimate (2D)
+    result.error_estimate_m = m_tdoa_solver->estimate_2d_positioning_error(sensors, m_test_point_lat, m_test_point_lon, 0.0, jitter_ns);
 
     // Store Result
     m_test_result = result;

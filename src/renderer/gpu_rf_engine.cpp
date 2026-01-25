@@ -359,6 +359,22 @@ float calculate_hata(float d_km, float f_mhz, float h_tx, float h_rx) {
    return 69.55 + 26.16*log_f - 13.82*log_h - a_h_rx + (44.9 - 6.55*log_h)*log_d;
 }
 
+float calculate_two_ray(float d_km, float f_mhz, float h_tx, float h_rx) {
+    if (d_km <= 0.001) return 0.0;
+    float d = d_km * 1000.0;
+    float lambda = 299.79 / f_mhz;
+    float d_bk = (4.0 * h_tx * h_rx) / lambda;
+    if (d < d_bk) {
+        return calculate_fspl(d_km, f_mhz);
+    } else {
+        float h_tx_safe = max(0.1, h_tx);
+        float h_rx_safe = max(0.1, h_rx);
+        float pel = 40.0 * log(d)/log(10.0) - 20.0 * log(h_tx_safe)/log(10.0) - 20.0 * log(h_rx_safe)/log(10.0);
+        float fspl = calculate_fspl(d_km, f_mhz);
+        return max(pel, fspl);
+    }
+}
+
 // Turbo Colormap (Copyright 2019 Google LLC. Apache License 2.0)
 float turbo_r(float x) {
     const vec4 kRedVec4 = vec4(0.13572138, 4.61539260, -42.66032258, 132.13108234);
@@ -416,7 +432,7 @@ void main() {
         // Optimization: In Heatmap (0), we can exit early if we found a very strong signal.
         // But for Overlap (1) and TDOA (2), we must check ALL sensors to count overlaps.
         if (u_viz_mode == 0 && max_dbm >= -10.0) break; 
-
+        
         vec2 s_uv = u_sensor_pos_range[i].xy;
         float s_range = u_sensor_pos_range[i].z; 
 
@@ -460,11 +476,16 @@ void main() {
         
         float d_km = dist_m / 1000.0;
         float quick_loss = 0.0;
-        float h_tx = mast + ground;
+        float h_tx_amsl = mast + ground;
+        float h_tx_agl = mast; // AGL for models
+
         if (model == 0) {
             quick_loss = calculate_fspl(d_km, freq);
+        } else if (model == 4) { // TwoRay
+            quick_loss = calculate_two_ray(d_km, freq, h_tx_agl, u_target_alt_agl);
         } else {
-            quick_loss = calculate_hata(d_km, freq, h_tx, u_target_alt_agl);
+            // Hata - Use Mast Height (AGL) and Target Height (AGL)
+            quick_loss = calculate_hata(d_km, freq, h_tx_agl, u_target_alt_agl);
         }
         
         float estimated_rx = tx_pwr + gain - quick_loss - pattern_loss - 10.0; 
@@ -485,7 +506,7 @@ void main() {
             float p_h = texture(u_elevation_tex, p_uv).r;
             float d1 = dist_m * t;
             float d2 = dist_m * (1.0 - t);
-            float h_los = h_tx + t * (h_rx - h_tx);
+            float h_los = h_tx_amsl + t * (h_rx - h_tx_amsl); // Line of sight uses AMSL
             float bulge = (d1 * d2) / (2.0 * R_eff);
             float h_obs = p_h + bulge;
             float clearance = h_los - h_obs;
@@ -647,71 +668,6 @@ void main() {
     // Calculate UV based on CURRENT TEXTURE BOUNDS, not requested bounds!
     float u = (float)((s.get_longitude() - cur_min_lon) / (cur_max_lon - cur_min_lon));
     float v = 1.0f - (float)((s.get_latitude() - cur_min_lat) / (cur_max_lat - cur_min_lat));
-    // Wait, shader uses v=0 for BOTTOM?
-    // My shader calc: lat = min + v * (max-min). v=0 -> min. v=1 -> max.
-    // OpenGL 0,0 is Bottom-Left.
-    // So if my Texture has MinLat at Row 0. And shader samples 0,0. It gets MinLat.
-    // In update_elevation: y=0 maps to min_lat. data[0] is min_lat.
-    // glTexImage: ptr points to row 0.
-    // Standard GL: row 0 is BOTTOM.
-    // So Bottom (v=0) contains MAX LAT.
-    // So v=0 has MaxLat.
-    // So Texture is INVERTED relative to standard (0=Min).
-    // So `texture(uv)`: uv.y=0 get MaxLat.
-
-    // If I want standard logic (v=0 is Min):
-    // I should NOT FLIP in update_elevation_texture?
-    // `data` has y=0 -> min_lat.
-    // If I upload `data` directly. Index 0 is MinLat.
-    // GL puts Index 0 at Bottom (v=0).
-    // So v=0 is MinLat.
-    // This is Standard.
-    // Why did I flip?
-    // Maybe ImGui expects top-down?
-
-    // If I remove flip in `update_elevation_texture`, then v=0 is MinLat.
-    // Then `pixel_lat = min + v*range` is Correct.
-    // Then Sensor V `(lat-min)/range` is Correct.
-    // Then MapWidget UVs?
-    // MapWidget `v_min` (Top/MaxLat).
-    // WE pass UVs to AddImage.
-    // MaxLat should satisfy `v=1`.
-    // `v = 1 - (lat - min)/range` -> Lat=Max -> v=0.
-    // If we pass v=0 to Top.
-    // Top has v=0.
-    // GL Texture has v=0 at Bottom (MinLat).
-    // So Top has v=1?
-    // ImGui Image: uv0=(0,0), uv1=(1,1).
-    // 0,0 is Top-Left of drawn rect? Yes.
-    // So drawn rect Top gets v=0.
-    // Drawn rect Top is MaxLat.
-    // Texture at v=0 is MinLat.
-    // So MaxLat gets MinLat data. INVERTED.
-
-    // Solution:
-    // 1. Keep Flip.
-    //    Texture v=0 is MaxLat.
-    //    MapWidget maps MaxLat to v=0.
-    //    Perfect. v=0 -> Top of screen -> MaxLat Data.
-    //    Shader `pixel_lat = min + v*range` -> v=0 gives min.
-    //    Wait. If v=0 is MaxLat data...
-    //    Then Shader Math `min + 0` = min.
-    //    So Shader Math thinks it is at MinLat.
-    //    But Texture Data is at MaxLat.
-    //    And Screen Position is at MaxLat.
-    //    So we are rendering MaxLat pixels, using MaxLat Elevation, but CALCULATING distance assuming MinLat.
-    //    This is incorrect for Lat-dependent scale.
-
-    // Fix:
-    // If v=0 corresponds to MaxLat (due to flip).
-    // Then `pixel_lat = max_lat - v * (max - min)`.
-    // v=0 -> max. v=1 -> min.
-
-    // Sensor V calc:
-    // `v = (s.lat - min)/range` -> v=1 at max.
-    // Needs to match texture coordinate system.
-    // If texture v=0 is Max.
-    // Sensor v should be `1.0 - (lat-min)/range`. (0 at max).
 
     // I will apply this logic change.
 

@@ -33,11 +33,12 @@ public:
       -> std::future<std::shared_ptr<coverage_grid_t>>;
 
   // Propagation Models
-  static auto calculate_fspl(double d_km, double f_mhz) -> double;
-
-  static auto calculate_hata(double d_km, double f_mhz, double h_tx, double h_rx, PropagationModel model) -> double;
+  // calculate_fresnel_zone remains useful utility?
+  // Yes, keep fresnel zone here or move to geo_math?
+  // rf_models might be better place, but let's keep it here for now to minimize churn.
 
   // Calculate radius of the nth Fresnel zone at a specific distance point
+
   // d1: distance from first endpoint (meters)
   // d2: distance from second endpoint (meters)
   // wavelength: signal wavelength (meters)

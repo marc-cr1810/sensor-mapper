@@ -13,7 +13,8 @@ enum class PropagationModel
   FreeSpace = 0,
   HataUrban = 1,
   HataSuburban = 2,
-  HataRural = 3
+  HataRural = 3,
+  TwoRay = 4
 };
 
 class sensor_t

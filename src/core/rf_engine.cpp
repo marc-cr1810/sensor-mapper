@@ -1,4 +1,5 @@
 #include "rf_engine.hpp"
+#include "rf_models.hpp"
 #include "geo_math.hpp"
 #include "rasterizer_utils.hpp"
 #include <algorithm>
@@ -13,43 +14,6 @@ rf_engine_t::rf_engine_t()
 }
 rf_engine_t::~rf_engine_t()
 {
-}
-
-auto rf_engine_t::calculate_fspl(double d_km, double f_mhz) -> double
-{
-  if (d_km <= 0.001)
-    return 0.0;
-  return 20.0 * std::log10(d_km) + 20.0 * std::log10(f_mhz) + 32.44;
-}
-
-auto rf_engine_t::calculate_hata(double d_km, double f_mhz, double h_tx, double h_rx, PropagationModel model) -> double
-{
-  if (d_km <= 0.001)
-    return 0.0;
-
-  // Clamp values to valid ranges for Hata or allow extension
-  double log_f = std::log10(f_mhz);
-  double log_h_tx = std::log10(std::max(1.0, h_tx));
-  double log_d = std::log10(d_km);
-
-  // Correction factor a(h_rx) for small/medium city
-  double a_h_rx = (1.1 * log_f - 0.7) * h_rx - (1.56 * log_f - 0.8);
-
-  double loss_urban = 69.55 + 26.16 * log_f - 13.82 * log_h_tx - a_h_rx + (44.9 - 6.55 * log_h_tx) * log_d;
-
-  if (model == PropagationModel::HataUrban)
-  {
-    return loss_urban;
-  }
-  else if (model == PropagationModel::HataSuburban)
-  {
-    double term = std::log10(f_mhz / 28.0);
-    return loss_urban - 2.0 * term * term - 5.4;
-  }
-  else
-  { // Rural
-    return loss_urban - 4.78 * log_f * log_f + 18.33 * log_f - 40.94;
-  }
 }
 
 auto rf_engine_t::compute_coverage(const std::vector<sensor_t> &sensors, elevation_service_t *elevation_service, const building_service_t *building_service, double min_lat, double max_lat, double min_lon, double max_lon, int width,
@@ -114,9 +78,10 @@ auto rf_engine_t::compute_coverage(const std::vector<sensor_t> &sensors, elevati
 
                             // Path Loss
                             double d_km = dist_m / 1000.0;
-                            double path_loss = 0.0;
-                            double h_tx = sensor.get_mast_height() + sensor.get_ground_elevation();
-                            double h_rx = 2.0 + cell_elevation_m;
+                            double h_tx_amsl = sensor.get_mast_height() + sensor.get_ground_elevation();
+                            double h_rx_amsl = 2.0 + cell_elevation_m;
+                            double h_tx = sensor.get_mast_height(); // AGL for models
+                            double h_rx = 2.0;                      // AGL for models (assuming flat earth model for propagation relative to ground)
 
                             // Single Knife-Edge Diffraction (Fresnel)
                             double total_diffraction_loss = 0.0;
@@ -145,14 +110,11 @@ auto rf_engine_t::compute_coverage(const std::vector<sensor_t> &sensors, elevati
                                 elevation_service->get_elevation(p_lat, p_lon, p_elev);
 
                                 // Heights relative to sea level, ADJUSTED for Earth Curvature (4/3 R)
-                                // Effective height drops as we move away from both endpoints
-                                // But here we model the "bulge" of the earth between points
-                                // Or simpler: Flat earth with curved ray?
                                 // Standard approach: Curved Earth, Straight Ray.
                                 // h_obstacle_effective = h_terrain + h_curvature_bulge
 
                                 // Height of the straight line ray at this point
-                                double ray_h = h_tx + step_t * (h_rx - h_tx);
+                                double ray_h = h_tx_amsl + step_t * (h_rx_amsl - h_tx_amsl);
 
                                 // Earth curvature "bulge" at distance d1 from TX and d2 from RX
                                 // bulge = (d1 * d2) / (2 * k * R)
@@ -166,8 +128,6 @@ auto rf_engine_t::compute_coverage(const std::vector<sensor_t> &sensors, elevati
                                 double clearance = ray_h - obstacle_h;
 
                                 // Calculate Fresnel Parameter v for this point
-                                // v is maximized when clearance is most negative (deepest obstruction)
-                                // or least positive (closest pass)
                                 double v = geo::fresnel_parameter(d1, d2, sensor.get_frequency_mhz(), -clearance);
 
                                 if (v > max_v)
@@ -179,17 +139,7 @@ auto rf_engine_t::compute_coverage(const std::vector<sensor_t> &sensors, elevati
                               total_diffraction_loss = geo::knife_edge_loss(max_v);
                             }
 
-                            if (sensor.get_propagation_model() == PropagationModel::FreeSpace)
-                            {
-                              path_loss = calculate_fspl(d_km, sensor.get_frequency_mhz());
-                            }
-                            else
-                            {
-                              // Hata requires effective height.
-                              // h_tx is height above average terrain vs height above ground.
-                              // Using Mast Height for now as per Hata spec relative to ground.
-                              path_loss = calculate_hata(d_km, sensor.get_frequency_mhz(), sensor.get_mast_height(), 2.0, sensor.get_propagation_model());
-                            }
+                            double path_loss = rf_models::calculate_path_loss(d_km, sensor.get_frequency_mhz(), h_tx, h_rx, sensor.get_propagation_model());
 
                             double rx = sensor.get_tx_power_dbm() + sensor.get_tx_antenna_gain_dbi() + sensor.get_rx_antenna_gain_dbi() - path_loss + pattern_gain - total_diffraction_loss;
 
