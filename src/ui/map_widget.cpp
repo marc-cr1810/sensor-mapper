@@ -680,7 +680,7 @@ auto map_widget_t::draw(std::vector<sensor_t> &sensors, std::set<int> &selected_
           m_building_service->fetch_buildings(render_min_lat, render_max_lat, render_min_lon, render_max_lon);
         }
 
-        auto result = m_rf_engine->render(sensors, &elevation_service, m_building_service.get(), render_min_lat, render_max_lat, render_min_lon, render_max_lon, m_min_signal_dbm, m_viz_mode);
+        auto result = m_rf_engine->render(sensors, &elevation_service, m_building_service.get(), render_min_lat, render_max_lat, render_min_lon, render_max_lon, m_min_signal_dbm, m_viz_mode, m_target_alt_agl);
         m_heatmap_texture_id = result.texture_id;
 
         // IMPORTANT: Only acknowledge "clean" state if result is ready/fresh.
@@ -2220,6 +2220,58 @@ auto map_widget_t::draw_path_profile_window(elevation_service_t &elevation_servi
     ImVec2 los_p1 = world_to_screen(0.0, start_h_eff);
     ImVec2 los_p2 = world_to_screen(dist_m, end_h_eff);
     draw_list->AddLine(los_p1, los_p2, IM_COL32(255, 255, 0, 255), 2.0f);
+
+    // Fresnel Zone Visualization
+    static bool show_fresnel = true;
+    ImGui::SetCursorPos(ImVec2(canvas_p0.x - ImGui::GetWindowPos().x + 10, canvas_p0.y - ImGui::GetWindowPos().y + 10));
+    ImGui::Checkbox("Show 1st Fresnel Zone", &show_fresnel);
+
+    if (show_fresnel)
+    {
+      std::vector<ImVec2> upper_curve;
+      std::vector<ImVec2> lower_curve;
+
+      // Calculate radius at each point
+      // r = 17.32 * sqrt((d1 * d2) / (f_GHz * d_total))
+      double dist_km = dist_m / 1000.0;
+      double f_ghz = freq_mhz / 1000.0f;
+
+      for (size_t i = 0; i < profile.size(); ++i)
+      {
+        double d1_m = profile[i].first;
+        double d2_m = dist_m - d1_m;
+
+        // Avoid division by zero at endpoints
+        if (d1_m < 0.1 || d2_m < 0.1)
+        {
+          double h_los_at_point = start_h_eff + (end_h_eff - start_h_eff) * (d1_m / dist_m);
+          upper_curve.push_back(world_to_screen(d1_m, (float)h_los_at_point));
+          lower_curve.push_back(world_to_screen(d1_m, (float)h_los_at_point));
+          continue;
+        }
+
+        double d1_km = d1_m / 1000.0;
+        double d2_km = d2_m / 1000.0;
+
+        // Radius in meters
+        double radius_m = 17.32 * std::sqrt((d1_km * d2_km) / (f_ghz * dist_km));
+
+        double h_los_at_point = start_h_eff + (end_h_eff - start_h_eff) * (d1_m / dist_m);
+
+        upper_curve.push_back(world_to_screen(d1_m, (float)(h_los_at_point + radius_m)));
+        lower_curve.push_back(world_to_screen(d1_m, (float)(h_los_at_point - radius_m)));
+      }
+
+      // Draw Curves
+      if (upper_curve.size() > 1)
+      {
+        ImU32 fresnel_col = IM_COL32(100, 200, 255, 120); // Light Blue transparent
+        draw_list->AddPolyline(upper_curve.data(), static_cast<int>(upper_curve.size()), fresnel_col, false, 1.5f);
+        draw_list->AddPolyline(lower_curve.data(), static_cast<int>(lower_curve.size()), fresnel_col, false, 1.5f);
+
+        // Connect endpoints for closed loop (optional, but Polyline is open)
+      }
+    }
 
     // Hover Logic
     if (is_hovered_graph)

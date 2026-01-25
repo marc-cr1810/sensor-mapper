@@ -224,8 +224,8 @@ auto gpu_rf_engine_t::generate_elevation_data(elevation_service_t *service, cons
   return flipped_data;
 }
 
-auto gpu_rf_engine_t::render(const std::vector<sensor_t> &sensors, elevation_service_t *service, const building_service_t *building_service, double min_lat, double max_lat, double min_lon, double max_lon, float min_signal_dbm, int viz_mode)
-    -> render_result_t
+auto gpu_rf_engine_t::render(const std::vector<sensor_t> &sensors, elevation_service_t *service, const building_service_t *building_service, double min_lat, double max_lat, double min_lon, double max_lon, float min_signal_dbm, int viz_mode,
+                             float target_alt_agl) -> render_result_t
 {
   // 1. Check if background tasks are done
   if (m_is_generating && m_terrain_future.valid())
@@ -335,8 +335,10 @@ uniform vec4 u_sensor_params_2[MAX_SENSORS];  // x=gain, y=mast, z=ground, w=mod
 
 uniform vec2 u_lat_range; // x=min_lat, y=max_lat
 uniform vec2 u_lon_range; // x=min_lon, y=max_lon
+
 uniform float u_min_signal_dbm; // Minimum signal threshold to display
 uniform int u_viz_mode; // 0=Heatmap, 1=Overlap
+uniform float u_target_alt_agl; // Target AGL (drone) height
 
 float get_elevation(vec2 uv) {
     return texture(u_elevation_tex, uv).r;
@@ -391,7 +393,7 @@ const float METERS_PER_DEG = 111319.5; // Circumference / 360
 
 void main() {
     float my_elev = get_elevation(v_texcoord);
-    float h_rx = 2.0 + my_elev;
+    float h_rx = u_target_alt_agl + my_elev;
     
     // Calculate Lat/Lon Deltas for the Tile
     float lat_delta_deg = u_lat_range.y - u_lat_range.x;
@@ -462,7 +464,7 @@ void main() {
         if (model == 0) {
             quick_loss = calculate_fspl(d_km, freq);
         } else {
-            quick_loss = calculate_hata(d_km, freq, h_tx, 2.0);
+            quick_loss = calculate_hata(d_km, freq, h_tx, u_target_alt_agl);
         }
         
         float estimated_rx = tx_pwr + gain - quick_loss - pattern_loss - 10.0; 
@@ -617,7 +619,9 @@ void main() {
   m_shader->set_vec2("u_lon_range", (float)cur_min_lon, (float)cur_max_lon);
 
   m_shader->set_float("u_min_signal_dbm", min_signal_dbm);
+
   m_shader->set_int("u_viz_mode", viz_mode);
+  m_shader->set_float("u_target_alt_agl", target_alt_agl);
 
   std::vector<size_t> sensor_indices(sensors.size());
   for (size_t i = 0; i < sensors.size(); ++i)

@@ -205,6 +205,19 @@ public:
     m_timing_jitter_ns = jitter;
   }
 
+  auto get_target_alt_agl() const -> float
+  {
+    return m_target_alt_agl;
+  }
+  auto set_target_alt_agl(float agl) -> void
+  {
+    if (m_target_alt_agl != agl)
+    {
+      m_target_alt_agl = agl;
+      m_heatmap_dirty = true;
+    }
+  }
+
   // Tool State
   enum class tool_state_t
   {
@@ -292,6 +305,8 @@ private:
   tdoa_result_t m_test_result;
 
   std::unique_ptr<tdoa_solver_t> m_tdoa_solver;
+
+  float m_target_alt_agl = 50.0f; // Default drone flight altitude
 
   // Elevation Visualization Textures
   struct source_texture_t

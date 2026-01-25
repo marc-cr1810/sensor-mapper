@@ -29,11 +29,9 @@ public:
   };
 
   // Replaces rf_engine_t::compute_coverage but returns a Texture ID directly!
-  // We don't return a std::future<coverage_grid> because the result stays on
-  // GPU. If we need the CPU data (e.g. for inspection), we'd need glGetTexImage
   // (slow). For visualization, we just need the texture ID.
   auto render(const std::vector<sensor_t> &sensors, elevation_service_t *elevation_service, const building_service_t *building_service, double min_lat, double max_lat, double min_lon, double max_lon, float min_signal_dbm = -90.0f,
-              int viz_mode = 0) -> render_result_t;
+              int viz_mode = 0, float target_alt_agl = 2.0f) -> render_result_t;
 
   // Read back signal strength (dBm) at a specific pixel coordinate (0,0 is bottom-left)
   auto read_dbm_at(int x, int y) -> float;

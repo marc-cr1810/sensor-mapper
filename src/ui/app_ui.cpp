@@ -810,8 +810,8 @@ void AppUI::render_map_view_controls(map_widget_t &map)
     end_group(140.0f);
   }
 
-  // --- Group 4: Config & Tools (Approx 300px) ---
-  wrap_group(300.0f);
+  // --- Group 4: Config & Tools (Approx 400px) ---
+  wrap_group(400.0f);
   {
     ImGui::SetNextItemWidth(80);
     float min_signal = map.get_min_signal_dbm();
@@ -819,6 +819,14 @@ void AppUI::render_map_view_controls(map_widget_t &map)
       map.set_min_signal_dbm(min_signal);
     if (ImGui::IsItemHovered())
       ImGui::SetTooltip("Threshold: %.0f dBm", min_signal);
+
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(80);
+    float target_alt = map.get_target_alt_agl();
+    if (ImGui::SliderFloat("##targetalt", &target_alt, 0.0f, 500.0f, "AGL: %.0fm"))
+      map.set_target_alt_agl(target_alt);
+    if (ImGui::IsItemHovered())
+      ImGui::SetTooltip("Target (Drone) Altitude: %.0f m AGL", target_alt);
 
     ImGui::SameLine();
     if (ImGui::Button("Export"))
