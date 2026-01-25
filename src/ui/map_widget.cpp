@@ -1582,6 +1582,7 @@ auto map_widget_t::set_tdoa_test_point(double lat, double lon) -> void
   m_test_point_lon = lon;
 
   // Force update if needed
+  // No cache clearing needed as we removed caching
 }
 
 auto map_widget_t::render_hyperbolas(const std::vector<sensor_t> &sensors, ImDrawList *draw_list, const ImVec2 &canvas_p0, const ImVec2 &canvas_sz) -> void
@@ -2034,20 +2035,19 @@ auto map_widget_t::render_test_point(const std::vector<sensor_t> &sensors, ImDra
   if (!m_has_test_point)
     return;
 
+  // We need a result to draw (instantaneous for jitter)
+  tdoa_result_t result_to_draw;
+
   // --- Calculate Test Point Data ---
   if (sensors.size() >= 3 && m_tdoa_solver)
   {
     // 1. Calculate ideal TDOAs
-    auto ideal_tdoa = m_tdoa_solver->calculate_tdoa(sensors, m_test_point_lat, m_test_point_lon, 0.0);
+    // Use m_target_alt_agl as the "Truth" altitude (assuming map surface is 0)
+    double truth_alt = static_cast<double>(m_target_alt_agl);
+    auto ideal_tdoa = m_tdoa_solver->calculate_tdoa(sensors, m_test_point_lat, m_test_point_lon, truth_alt);
 
-    // 1b. Inject Synthetic Noise (Jitter)
-    // To visualize the "Estimated" point wandering, we add random timing error.
-    static std::mt19937 gen(12345); // Fixed seed for stability, or random_device
-    // Actually, we want it to 'jitter' every frame? Or static?
-    // If static, it won't move. If frame-based, it will jump wildly.
-    // User probably wants to see *a* sample. Let's let it jitter every frame for now, or slow it down.
-    // Fast jitter is good to see the "cloud" of probability.
-
+    // 1b. Inject Synthetic Noise (Jitter) NO CACHING - Generate every frame for visual "cloud"
+    static std::mt19937 gen(12345);
     double jitter_ns = static_cast<double>(m_timing_jitter_ns);
     std::normal_distribution<double> d(0.0, jitter_ns);
 
@@ -2058,21 +2058,46 @@ auto map_widget_t::render_test_point(const std::vector<sensor_t> &sensors, ImDra
     }
 
     // 2. Solve (Verify Geometry) with NOISY data
-    // 2. Solve (Verify Geometry) with NOISY data - Use 2D Solver for consistency with map view
-    // Fix altitude to test point altitude (if we had it, otherwise 0.0)
-    // Actually, solve_position_2d requires initial lat/lon/alt. Fixed Alt = 0.0
-    tdoa_result_t result = m_tdoa_solver->solve_position_2d(sensors, noisy_tdoa, m_test_point_lat, m_test_point_lon, 0.0);
+    // Use 2D Solver
+    tdoa_result_t instant_2d = m_tdoa_solver->solve_position_2d(sensors, noisy_tdoa, m_test_point_lat, m_test_point_lon, 0.0);
+    instant_2d.error_estimate_m = m_tdoa_solver->estimate_2d_positioning_error(sensors, m_test_point_lat, m_test_point_lon, 0.0, jitter_ns);
 
-    // 3. Update Error Estimate
-    // 3. Update Error Estimate (2D)
-    result.error_estimate_m = m_tdoa_solver->estimate_2d_positioning_error(sensors, m_test_point_lat, m_test_point_lon, 0.0, jitter_ns);
+    // 3D Solver
+    tdoa_result_t instant_3d = m_tdoa_solver->solve_position(sensors, noisy_tdoa, m_test_point_lat, m_test_point_lon, 0.0);
+    instant_3d.error_estimate_m = m_tdoa_solver->estimate_positioning_error(sensors, m_test_point_lat, m_test_point_lon, 0.0, jitter_ns);
 
-    // Store Result
-    m_test_result = result;
+    // --- Smoothing for UI Stability ---
+    float alpha = 0.05f; // Smoothing factor (low pass)
+
+    auto smooth_result = [&](const tdoa_result_t &current, const tdoa_result_t &instant) -> tdoa_result_t
+    {
+      if (!current.converged && instant.converged)
+        return instant; // Snap to first valid
+      if (!instant.converged)
+        return current; // Keep last valid or failed state
+
+      tdoa_result_t res = instant;
+      // LERP
+      res.latitude = current.latitude * (1.0 - alpha) + instant.latitude * alpha;
+      res.longitude = current.longitude * (1.0 - alpha) + instant.longitude * alpha;
+      res.altitude = current.altitude * (1.0 - alpha) + instant.altitude * alpha;
+      res.error_estimate_m = current.error_estimate_m * (1.0 - alpha) + instant.error_estimate_m * alpha;
+      res.gdop = current.gdop * (1.0 - alpha) + instant.gdop * alpha;
+      return res;
+    };
+
+    // Update stored results (SMOOTHED) for UI
+    m_test_result_2d = smooth_result(m_test_result_2d, instant_2d);
+    m_test_result_3d = smooth_result(m_test_result_3d, instant_3d);
+
+    // Use INSTANT 2D result for drawing (Visual Jitter)
+    result_to_draw = instant_2d;
   }
   else
   {
-    m_test_result = tdoa_result_t{};
+    m_test_result_2d = tdoa_result_t{};
+    m_test_result_3d = tdoa_result_t{};
+    result_to_draw = tdoa_result_t{};
   }
 
   // --- Render Markers ---
@@ -2108,10 +2133,10 @@ auto map_widget_t::render_test_point(const std::vector<sensor_t> &sensors, ImDra
   draw_list->AddCircle(p_truth, size * 0.6f, IM_COL32(255, 0, 0, 255), 0, 2.0f);
   draw_list->AddText(ImVec2(p_truth.x + size, p_truth.y - size), IM_COL32(255, 255, 255, 255), "Truth");
 
-  // Draw Estimated Marker (Blue X) if valid
-  if (sensors.size() >= 3 && m_test_result.converged)
+  // Draw Estimated Marker (Blue X) using INSTANT result
+  if (sensors.size() >= 3 && result_to_draw.converged)
   {
-    ImVec2 p_est = latlon_to_screen(m_test_result.latitude, m_test_result.longitude);
+    ImVec2 p_est = latlon_to_screen(result_to_draw.latitude, result_to_draw.longitude);
 
     // Draw Error Vector (Yellow Dashed)
     draw_list->AddLine(p_truth, p_est, IM_COL32(255, 255, 0, 180), 2.0f);
@@ -2121,8 +2146,7 @@ auto map_widget_t::render_test_point(const std::vector<sensor_t> &sensors, ImDra
     draw_list->AddLine(ImVec2(p_est.x + size * 0.7f, p_est.y - size * 0.7f), ImVec2(p_est.x - size * 0.7f, p_est.y + size * 0.7f), IM_COL32(0, 100, 255, 255), 3.0f);
     draw_list->AddText(ImVec2(p_est.x + size, p_est.y - size), IM_COL32(100, 200, 255, 255), "Est");
   }
-
-} // function
+}
 
 auto map_widget_t::draw_path_profile_window(elevation_service_t &elevation_service) -> void
 {

@@ -185,7 +185,12 @@ public:
   auto set_tdoa_test_point(double lat, double lon) -> void;
   auto get_tdoa_test_result() const -> const tdoa_result_t &
   {
-    return m_test_result;
+    // Default to 2D for backward compatibility if needed, or renamed to explicit 2d in UI refactor
+    return m_test_result_2d;
+  }
+  auto get_tdoa_test_result_3d() const -> const tdoa_result_t &
+  {
+    return m_test_result_3d;
   }
   auto has_tdoa_test_point() const -> bool
   {
@@ -302,7 +307,8 @@ private:
   bool m_has_test_point = false;
   double m_test_point_lat = 0.0;
   double m_test_point_lon = 0.0;
-  tdoa_result_t m_test_result;
+  tdoa_result_t m_test_result_2d;
+  tdoa_result_t m_test_result_3d;
 
   std::unique_ptr<tdoa_solver_t> m_tdoa_solver;
 

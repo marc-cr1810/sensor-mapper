@@ -727,9 +727,24 @@ void AppUI::render_tdoa_analysis(map_widget_t &map, const std::vector<sensor_t> 
 
     if (map.has_tdoa_test_point())
     {
-      auto result = map.get_tdoa_test_result();
-      ImGui::Text("Error: %.1f m", result.error_estimate_m);
-      ImGui::Text("GDOP: %.2f", result.gdop);
+      auto result_2d = map.get_tdoa_test_result();
+      ImGui::TextDisabled("2D ESTIMATE (Fixed Alt)");
+      ImGui::Text("Error: %.1f m", result_2d.error_estimate_m);
+      ImGui::Text("GDOP:  %.2f", result_2d.gdop);
+
+      ImGui::Spacing();
+      ImGui::TextDisabled("3D ESTIMATE (Free Space)");
+      auto result_3d = map.get_tdoa_test_result_3d();
+      if (result_3d.converged)
+      {
+        ImGui::Text("Alt:   %.1f m", result_3d.altitude);
+        ImGui::Text("Error: %.1f m", result_3d.error_estimate_m);
+        ImGui::Text("GDOP:  %.2f", result_3d.gdop);
+      }
+      else
+      {
+        ImGui::TextColored(ImVec4(1.0f, 0.5f, 0.5f, 1.0f), "Solver Diverged (Coplanar?)");
+      }
       if (ImGui::Button("Clear Point"))
         map.clear_tdoa_test_point();
     }
