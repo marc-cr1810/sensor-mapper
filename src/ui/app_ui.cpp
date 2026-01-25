@@ -130,6 +130,15 @@ void AppUI::render(map_widget_t &map, std::vector<sensor_t> &sensors, std::set<i
                  sensors.emplace_back("New Sensor", lat, lon, 5000.0);
                  auto &s = sensors.back();
                  s.set_mast_height(mast_h); // Set height (AGL)
+
+                 // Auto-set ground elevation
+                 float ground_h = 0.0f;
+                 if (elevation_service.get_elevation(lat, lon, ground_h))
+                 {
+                   s.set_ground_elevation(ground_h);
+                 }
+                 s.set_use_auto_elevation(true); // Enable auto updates
+
                  map.invalidate_rf_heatmap();
                  selected_indices.clear();
                  selected_indices.insert(static_cast<int>(sensors.size()) - 1);

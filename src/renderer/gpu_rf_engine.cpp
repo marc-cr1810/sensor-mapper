@@ -724,9 +724,20 @@ void main() {
     u_p1.push_back((float)s.get_frequency_mhz());
     u_p1.push_back((float)s.get_azimuth_deg());
     u_p1.push_back((float)s.get_beamwidth_deg());
+
+    float ground_elev = (float)s.get_ground_elevation();
+    if (s.get_use_auto_elevation() && service)
+    {
+      float h = 0.0f;
+      if (service->get_elevation(s.get_latitude(), s.get_longitude(), h))
+      {
+        ground_elev = h;
+      }
+    }
+
     u_p2.push_back((float)s.get_tx_antenna_gain_dbi());
     u_p2.push_back((float)s.get_mast_height());
-    u_p2.push_back((float)s.get_ground_elevation());
+    u_p2.push_back(ground_elev);
     u_p2.push_back((float)s.get_propagation_model());
     count++;
   }

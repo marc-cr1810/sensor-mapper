@@ -200,6 +200,19 @@ auto map_widget_t::draw(std::vector<sensor_t> &sensors, std::set<int> &selected_
         s.set_latitude(m_mouse_lat);
         s.set_longitude(m_mouse_lon);
 
+        s.set_latitude(m_mouse_lat);
+        s.set_longitude(m_mouse_lon);
+
+        // Update elevation if auto-elevation is enabled (or just always for convenience?)
+        // Better to respect the flag, but if dragging we probably want it to follow terrain.
+        // Let's assume yes if flag is set. AppUI sets it to true on creation.
+        if (s.get_use_auto_elevation())
+        {
+          float h = 0.0f;
+          if (elevation_service.get_elevation(m_mouse_lat, m_mouse_lon, h))
+            s.set_ground_elevation(h);
+        }
+
         invalidate_rf_heatmap();
       }
     }
