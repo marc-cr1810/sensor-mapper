@@ -33,7 +33,7 @@ private:
   // UI State
   bool m_show_sensor_config = true;
   bool m_show_map_view = true; // Still keep the window boolean just in case we use it, though we might simplify
-  bool m_show_elevation_data = true;
+  bool m_show_elevation_data = false;
   bool m_show_tdoa_analysis = true;
 };
 
