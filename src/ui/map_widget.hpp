@@ -30,6 +30,8 @@ public:
   auto get_building_at_location(double lat, double lon) const -> double; // Returns height or 0
   auto fetch_buildings_near(double lat, double lon) -> void;
   auto fetch_buildings_in_area(double min_lat, double max_lat, double min_lon, double max_lon) -> void;
+  auto has_buildings_for_area(double min_lat, double max_lat, double min_lon, double max_lon) const -> bool;
+  auto get_building_loading_status() const -> std::pair<int, int>;
   auto get_buildings_in_area(double min_lat, double max_lat, double min_lon, double max_lon) const -> std::vector<const building_t *>;
 
   auto set_center(double lat, double lon) -> void;

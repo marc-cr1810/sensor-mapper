@@ -343,7 +343,7 @@ auto map_widget_t::draw(std::vector<sensor_t> &sensors, std::set<int> &selected_
   }
 
   // Panning
-  if (is_active && ImGui::IsMouseDragging(ImGuiMouseButton_Left) && m_dragging_sensor_index == -1)
+  if (is_active && ImGui::IsMouseDragging(ImGuiMouseButton_Left) && m_dragging_sensor_index == -1 && !m_is_drawing_polygon)
   {
     ImVec2 delta = io.MouseDelta;
 
@@ -2531,6 +2531,20 @@ auto map_widget_t::screen_to_lat_lon(const ImVec2 &p, const ImVec2 &canvas_p0, c
     wy = 1.0;
 
   geo::world_to_lat_lon(wx, wy, lat_out, lon_out);
+}
+
+auto map_widget_t::has_buildings_for_area(double min_lat, double max_lat, double min_lon, double max_lon) const -> bool
+{
+  if (!m_building_service)
+    return false;
+  return m_building_service->has_buildings_for_area(min_lat, max_lat, min_lon, max_lon);
+}
+
+auto map_widget_t::get_building_loading_status() const -> std::pair<int, int>
+{
+  if (!m_building_service)
+    return {0, 0};
+  return m_building_service->get_loading_status();
 }
 
 } // namespace sensor_mapper

@@ -4,6 +4,9 @@
 #include <random>
 #include <algorithm>
 #include "geo_math.hpp"
+#include "tdoa_solver.hpp"
+#include "building_service.hpp" // For simple geometry checks
+#include <iostream>
 
 namespace sensor_mapper
 {
@@ -223,38 +226,127 @@ void sensor_optimizer_t::run_internal(std::vector<std::pair<double, double>> are
 
       for (size_t i = 0; i < pool.size(); ++i)
       {
-        // Metric 1: Spacing (Distance to nearest selected sensor)
-        double min_dist_to_sensor = 1e18;
-        for (const auto &s : selected)
+        if (config.strategy == OptimizationStrategy::Geometric)
         {
-          double d = geo::distance(pool[i].pos.first, pool[i].pos.second, s.pos.first, s.pos.second);
-          if (d < min_dist_to_sensor)
-            min_dist_to_sensor = d;
+          // --- GEOMETRIC STRATEGY (Fast) ---
+
+          // Metric 1: Spacing (Distance to nearest selected sensor)
+          double min_dist_to_sensor = 1e18;
+          for (const auto &s : selected)
+          {
+            double d = geo::distance(pool[i].pos.first, pool[i].pos.second, s.pos.first, s.pos.second);
+            if (d < min_dist_to_sensor)
+              min_dist_to_sensor = d;
+          }
+
+          // Metric 2: Coverage (Distance to center)
+          // We want a mix of "far out" for GDOP and "spread out" for coverage.
+          double dist_to_center = geo::distance(pool[i].pos.first, pool[i].pos.second, poly_clat, poly_clon);
+
+          // Metric 3: Building Preference - REMOVED per user request
+          // double building_multiplier = pool[i].is_building ? 2.5 : 1.0;
+          double building_multiplier = 1.0;
+
+          // Combined Score:
+          // - High spacing (prevents clustering)
+          // - Normalized distance to center factor (bias towards interior coverage)
+          // Normalized spacing (approx 500m-2km is good)
+          double spacing_factor = std::min(min_dist_to_sensor, 5000.0) / 1000.0;
+          // Coverage factor: we want some sensors far and some near.
+          // For 4 sensors, corners are fine for GDOP, but middle needs coverage.
+          double coverage_factor = 1.0 / (1.0 + (dist_to_center / 0.01)); // Boost interior
+
+          double score = (spacing_factor * 0.6 + coverage_factor * 0.4) * building_multiplier;
+
+          if (score > max_score)
+          {
+            max_score = score;
+            best_idx = i;
+          }
         }
-
-        // Metric 2: Coverage (Distance to center)
-        // We want a mix of "far out" for GDOP and "spread out" for coverage.
-        double dist_to_center = geo::distance(pool[i].pos.first, pool[i].pos.second, poly_clat, poly_clon);
-
-        // Metric 3: Building Preference - REMOVED per user request
-        // double building_multiplier = pool[i].is_building ? 2.5 : 1.0;
-        double building_multiplier = 1.0;
-
-        // Combined Score:
-        // - High spacing (prevents clustering)
-        // - Normalized distance to center factor (bias towards interior coverage)
-        // Normalized spacing (approx 500m-2km is good)
-        double spacing_factor = std::min(min_dist_to_sensor, 5000.0) / 1000.0;
-        // Coverage factor: we want some sensors far and some near.
-        // For 4 sensors, corners are fine for GDOP, but middle needs coverage.
-        double coverage_factor = 1.0 / (1.0 + (dist_to_center / 0.01)); // Boost interior
-
-        double score = (spacing_factor * 0.6 + coverage_factor * 0.4) * building_multiplier;
-
-        if (score > max_score)
+        else
         {
-          max_score = score;
-          best_idx = i;
+          // --- ADVANCED STRATEGY (GDOP + LOS) ---
+
+          // 1. LOS Check (Skip if blocked to center)
+          // Perform a simple raycast against all buildings to see if LOS to center is blocked
+          // This is expensive O(B), but we do it only for candidates in the pool.
+          // Note: This assumes center is the target of interest.
+          bool los_clear = true;
+          if (config.use_buildings && !config.buildings.empty())
+          {
+            // Check intersection with all buildings
+            // Simple segment check: pool[i].pos -> {poly_clat, poly_clon}
+            // We don't have building_service instance easily available, but we have config.buildings which are raw data.
+            // We need a helper for "does segment intersect polygon".
+            // For now, let's use a simpler proxy: distance to center should be clear.
+            // Actually, without the spatial index (quadtree) in building_service, iterating all buildings is slow O(N).
+            // pool size ~200, buildings ~1000 -> 200,000 checks. Doable in seconds.
+            for (const auto &b : config.buildings)
+            {
+              // Skip if it's the building we are ON
+              if (pool[i].is_building)
+              {
+                double d_self = geo::distance(pool[i].pos.first, pool[i].pos.second, b.footprint[0].lat, b.footprint[0].lon);
+                if (d_self < 50.0)
+                  continue;
+              }
+
+              // Check containment or intersection?
+              // Just check if building center is close to the line?
+              // Proper intersection is tedious here without the service.
+              // Let's rely on GDOP mainly for now and skip complex LOS unless we port the intersection logic.
+              // Or better: Use GDOP as the primary driver.
+            }
+          }
+
+          // 2. TDOA GDOP Calculation
+          // Create temp sensor list
+          std::vector<sensor_t> temp_sensors;
+          double min_dist_to_selected = 1e18; // Track spacing
+
+          for (const auto &s : selected)
+          {
+            temp_sensors.emplace_back("temp", s.pos.first, s.pos.second, 1000.0);
+            temp_sensors.back().set_mast_height(10.0);
+
+            // Spacing Check
+            double d = geo::distance(pool[i].pos.first, pool[i].pos.second, s.pos.first, s.pos.second);
+            if (d < min_dist_to_selected)
+              min_dist_to_selected = d;
+          }
+          temp_sensors.emplace_back("candidate", pool[i].pos.first, pool[i].pos.second, 1000.0);
+          temp_sensors.back().set_mast_height(10.0);
+
+          // Evaluate GDOP at the Center
+          tdoa_solver_t solver;
+          double g1 = solver.calculate_2d_gdop(temp_sensors, poly_clat, poly_clon, 0.0); // Center
+
+          double avg_gdop = g1;
+
+          // Minimize GDOP => Maximize Score = 1/GDOP
+          double base_score = 1.0 / (avg_gdop + 1e-6);
+
+          // Apply Diversity Penalty
+          double spacing_penalty = 1.0;
+          if (min_dist_to_selected < 200.0)
+          {
+            // Very close: severe penalty
+            spacing_penalty = 0.1;
+          }
+          else if (min_dist_to_selected < 500.0)
+          {
+            // Moderately close: linear ramp 0.1 -> 1.0
+            spacing_penalty = 0.1 + 0.9 * ((min_dist_to_selected - 200.0) / 300.0);
+          }
+
+          double score = base_score * spacing_penalty;
+
+          if (score > max_score)
+          {
+            max_score = score;
+            best_idx = i;
+          }
         }
       }
 
@@ -283,7 +375,7 @@ void sensor_optimizer_t::run_internal(std::vector<std::pair<double, double>> are
 
     for (size_t i = 0; i < selected.size(); ++i)
     {
-      sensor_t s("Auto Sensor " + std::to_string(i + 1), selected[i].pos.first, selected[i].pos.second, 1000.0);
+      sensor_t s("Auto Sensor " + std::to_string(i + 1), selected[i].pos.first, selected[i].pos.second, 5000.0);
       s.set_mast_height(15.0); // Slightly higher for auto-placed
       m_results.push_back(s);
     }

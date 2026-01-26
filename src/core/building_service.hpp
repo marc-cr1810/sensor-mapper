@@ -75,6 +75,9 @@ public:
   // Clear cache
   auto clear() -> void;
 
+  // Get loading status {active_fetches, queued_fetches}
+  auto get_loading_status() const -> std::pair<int, int>;
+
 private:
   struct impl_t;
   std::unique_ptr<impl_t> m_impl;

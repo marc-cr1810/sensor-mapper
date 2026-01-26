@@ -582,6 +582,11 @@ auto building_service_t::update() -> bool
   return new_data;
 }
 
+auto building_service_t::get_loading_status() const -> std::pair<int, int>
+{
+  return {static_cast<int>(m_impl->active_fetches.size()), static_cast<int>(m_impl->request_queue.size())};
+}
+
 auto building_service_t::clear() -> void
 {
   m_impl->buildings.clear();

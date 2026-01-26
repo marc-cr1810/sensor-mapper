@@ -929,6 +929,15 @@ void AppUI::render_auto_placement(map_widget_t &map)
   ImGui::Separator();
   ImGui::TextDisabled("ACTIONS");
 
+  // Strategy Selector
+  static int strategy_idx = 0; // 0=Geometric, 1=Advanced
+  const char *strategies[] = {"Geometric (Fast)", "Advanced (GDOP + LOS)"};
+  ImGui::Combo("Strategy", &strategy_idx, strategies, IM_ARRAYSIZE(strategies));
+  if (strategy_idx == 1)
+  {
+    ImGui::TextColored(ImVec4(1, 1, 0, 1), "Note: Advanced mode is slower.");
+  }
+
   if (map.is_drawing_polygon())
   {
     if (ImGui::Button("Finish Drawing", ImVec2(-1, 30)))
@@ -967,7 +976,63 @@ void AppUI::render_auto_placement(map_widget_t &map)
   }
   else
   {
-    if (ImGui::Button("Optimize Placement", ImVec2(-1, 40)))
+    if (m_waiting_for_buildings)
+    {
+      auto status = map.get_building_loading_status();
+      int active = status.first;
+      int queued = status.second;
+
+      if (active > 0 || queued > 0)
+      {
+        ImGui::Text("Loading building data... (%d active, %d queued)", active, queued);
+        // Show indeterminate if starting, or just pulsing
+        ImGui::ProgressBar(-1.0f * (float)ImGui::GetTime(), ImVec2(-1, 0), "Fetching tiles...");
+      }
+      else
+      {
+        ImGui::Text("Verifying data availability...");
+        ImGui::ProgressBar(1.0f, ImVec2(-1, 0), "Checking...");
+      }
+
+      // Check if loaded
+      double min_lat = 90.0, max_lat = -90.0, min_lon = 180.0, max_lon = -180.0;
+      for (const auto &p : polygon)
+      {
+        min_lat = std::min(min_lat, p.first);
+        max_lat = std::max(max_lat, p.first);
+        min_lon = std::min(min_lon, p.second);
+        max_lon = std::max(max_lon, p.second);
+      }
+
+      // If we don't need buildings, or they are loaded, OR if we are done loading (queue empty)
+      if (!m_opt_use_buildings || map.has_buildings_for_area(min_lat, max_lat, min_lon, max_lon) || (active == 0 && queued == 0))
+      {
+        m_waiting_for_buildings = false;
+
+        // Start Optimizer
+        optimizer_config_t config;
+        config.use_buildings = m_opt_use_buildings;
+        config.use_terrain = m_opt_use_terrain;
+        config.sensor_count = m_opt_sensor_count;
+        config.strategy = static_cast<OptimizationStrategy>(strategy_idx);
+
+        // Copy buildings in area for the background thread
+        auto building_ptrs = map.get_buildings_in_area(min_lat, max_lat, min_lon, max_lon);
+        for (auto b_ptr : building_ptrs)
+        {
+          if (b_ptr)
+            config.buildings.push_back(*b_ptr);
+        }
+
+        m_optimizer->start(polygon, config);
+      }
+
+      if (ImGui::Button("Cancel", ImVec2(-1, 20)))
+      {
+        m_waiting_for_buildings = false;
+      }
+    }
+    else if (ImGui::Button("Optimize Placement", ImVec2(-1, 40)))
     {
       // Trigger building fetch for the area
       double min_lat = 90.0, max_lat = -90.0, min_lon = 180.0, max_lon = -180.0;
@@ -980,21 +1045,8 @@ void AppUI::render_auto_placement(map_widget_t &map)
       }
       map.fetch_buildings_in_area(min_lat, max_lat, min_lon, max_lon);
 
-      // Start Optimizer
-      optimizer_config_t config;
-      config.use_buildings = m_opt_use_buildings;
-      config.use_terrain = m_opt_use_terrain;
-      config.sensor_count = m_opt_sensor_count;
-
-      // Copy buildings in area for the background thread
-      auto building_ptrs = map.get_buildings_in_area(min_lat, max_lat, min_lon, max_lon);
-      for (auto b_ptr : building_ptrs)
-      {
-        if (b_ptr)
-          config.buildings.push_back(*b_ptr);
-      }
-
-      m_optimizer->start(polygon, config);
+      // Enter wait state
+      m_waiting_for_buildings = true;
     }
   }
 

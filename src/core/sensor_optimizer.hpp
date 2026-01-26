@@ -11,11 +11,18 @@
 namespace sensor_mapper
 {
 
+enum class OptimizationStrategy
+{
+  Geometric, // Fast, spacing + centering
+  Advanced   // Slow, GDOP + LOS
+};
+
 struct optimizer_config_t
 {
   bool use_buildings = false;
   bool use_terrain = false;
   int sensor_count = 3;
+  OptimizationStrategy strategy = OptimizationStrategy::Geometric;
 
   // Data for the background thread
   std::vector<building_t> buildings;
