@@ -120,34 +120,38 @@ void sensor_optimizer_t::run_internal(std::vector<std::pair<double, double>> are
     }
   }
 
-  // 2. Generate fallback random points within polygon
-  double min_lat = 90.0, max_lat = -90.0, min_lon = 180.0, max_lon = -180.0;
-  for (const auto &p : area)
+  // 2. Generate random points within polygon (Terrain Mode)
+  if (config.use_terrain)
   {
-    min_lat = std::min(min_lat, p.first);
-    max_lat = std::max(max_lat, p.first);
-    min_lon = std::min(min_lon, p.second);
-    max_lon = std::max(max_lon, p.second);
-  }
-
-  std::uniform_real_distribution<double> dist_lat(min_lat, max_lat);
-  std::uniform_real_distribution<double> dist_lon(min_lon, max_lon);
-
-  int attempts = 0;
-  while (random_candidates.size() < 200 && attempts < 4000)
-  {
-    double lat = dist_lat(gen);
-    double lon = dist_lon(gen);
-    if (is_point_in_polygon(lat, lon, area))
+    double min_lat = 90.0, max_lat = -90.0, min_lon = 180.0, max_lon = -180.0;
+    for (const auto &p : area)
     {
-      random_candidates.push_back({lat, lon});
+      min_lat = std::min(min_lat, p.first);
+      max_lat = std::max(max_lat, p.first);
+      min_lon = std::min(min_lon, p.second);
+      max_lon = std::max(max_lon, p.second);
     }
-    attempts++;
+
+    std::uniform_real_distribution<double> dist_lat(min_lat, max_lat);
+    std::uniform_real_distribution<double> dist_lon(min_lon, max_lon);
+
+    int attempts = 0;
+    // Generate enough candidates to have a good pool
+    while (random_candidates.size() < 200 && attempts < 4000)
+    {
+      double lat = dist_lat(gen);
+      double lon = dist_lon(gen);
+      if (is_point_in_polygon(lat, lon, area))
+      {
+        random_candidates.push_back({lat, lon});
+      }
+      attempts++;
+    }
   }
 
   if (building_candidates.empty() && random_candidates.empty())
   {
-    update_status("Error: No valid locations found", 1.0f);
+    update_status("Error: No valid locations found (Check constraints)", 1.0f);
     m_running = false;
     return;
   }
@@ -162,12 +166,8 @@ void sensor_optimizer_t::run_internal(std::vector<std::pair<double, double>> are
   for (const auto &b : building_candidates)
     pool.push_back({b, true});
 
-  // Mix random ones if we don't have enough buildings OR buildings not requested
-  if (!config.use_buildings || pool.size() < (size_t)config.sensor_count * 5)
-  {
-    for (const auto &r : random_candidates)
-      pool.push_back({r, false});
-  }
+  for (const auto &r : random_candidates)
+    pool.push_back({r, false});
 
   // Shuffle pool
   std::shuffle(pool.begin(), pool.end(), gen);
@@ -236,8 +236,9 @@ void sensor_optimizer_t::run_internal(std::vector<std::pair<double, double>> are
         // We want a mix of "far out" for GDOP and "spread out" for coverage.
         double dist_to_center = geo::distance(pool[i].pos.first, pool[i].pos.second, poly_clat, poly_clon);
 
-        // Metric 3: Building Preference
-        double building_multiplier = pool[i].is_building ? 2.5 : 1.0;
+        // Metric 3: Building Preference - REMOVED per user request
+        // double building_multiplier = pool[i].is_building ? 2.5 : 1.0;
+        double building_multiplier = 1.0;
 
         // Combined Score:
         // - High spacing (prevents clustering)

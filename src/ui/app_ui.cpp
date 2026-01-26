@@ -944,9 +944,15 @@ void AppUI::render_auto_placement(map_widget_t &map)
     }
   }
 
-  // Disable if not ready (polyon empty)
+  // Disable if not ready (polyon empty) OR no mode selected
   const auto &polygon = map.get_target_polygon();
   bool ready = !polygon.empty() && !map.is_drawing_polygon();
+  if (!m_opt_use_buildings && !m_opt_use_terrain)
+  {
+    ready = false;
+    ImGui::TextColored(ImVec4(1, 0.4, 0.4, 1), "Select at least one placement mode.");
+  }
+
   if (!ready)
     ImGui::BeginDisabled();
 
