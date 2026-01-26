@@ -8,6 +8,7 @@
 #include "ui/map_widget.hpp"
 #include "ui/antenna_pattern_ui.hpp"
 #include "core/sensor_optimizer.hpp"
+#include "simulation_ui.hpp"
 
 namespace sensor_mapper
 {
@@ -40,6 +41,9 @@ private:
   bool m_show_auto_placement = false;
   bool m_waiting_for_buildings = false;
   bool m_opt_start_pending = false;
+
+  bool m_show_simulation = false;
+  SimulationUI m_simulation_ui;
 
   // Optimization Settings
   bool m_opt_use_buildings = true;

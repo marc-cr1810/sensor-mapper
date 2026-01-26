@@ -482,6 +482,34 @@ auto map_widget_t::draw(std::vector<sensor_t> &sensors, std::set<int> &selected_
         m_tool_state = tool_state_t::Navigate; // Done
         m_show_profile_window = true;
       }
+      else if (m_tool_state == tool_state_t::DronePath_Draw)
+      {
+        bool closed = false;
+        // Check for closing the loop (click near first point)
+        if (!m_drone_path.empty())
+        {
+          ImVec2 first_p = lat_lon_to_screen(m_drone_path.front().first, m_drone_path.front().second, canvas_p0, canvas_sz);
+          ImVec2 mouse_p = ImGui::GetMousePos();
+          float dist_sq = (first_p.x - mouse_p.x) * (first_p.x - mouse_p.x) + (first_p.y - mouse_p.y) * (first_p.y - mouse_p.y);
+          if (m_drone_path.size() >= 3 && dist_sq < 15.0f * 15.0f)
+          {
+            // Close the loop
+            m_drone_path.push_back(m_drone_path.front());
+            closed = true;
+            // End drawing?
+            // Maybe keep drawing? No, closing usually implies finishing.
+            m_tool_state = tool_state_t::Navigate;
+          }
+        }
+
+        if (!closed)
+        {
+          m_drone_path.push_back({click_lat, click_lon});
+        }
+
+        // Invalidate results when path changes
+        m_drone_path_results.clear();
+      }
     }
   }
 
@@ -915,6 +943,81 @@ auto map_widget_t::draw(std::vector<sensor_t> &sensors, std::set<int> &selected_
     ImVec2 last_p = lat_lon_to_screen(m_target_polygon.back().first, m_target_polygon.back().second, canvas_p0, canvas_sz);
     ImVec2 mouse_p = ImGui::GetMousePos();
     draw_list->AddLine(last_p, mouse_p, IM_COL32(0, 255, 0, 180), 1.5f);
+  }
+
+  // --- Draw Drone Path ---
+  // A. Editing State (White/Yellow Lines)
+  if (!m_drone_path.empty())
+  {
+    std::vector<ImVec2> path_points;
+    for (const auto &pt : m_drone_path)
+    {
+      path_points.push_back(lat_lon_to_screen(pt.first, pt.second, canvas_p0, canvas_sz));
+    }
+
+    if (path_points.size() > 1)
+    {
+      // Draw base path line
+      ImU32 path_col = IM_COL32(0, 255, 255, 200); // Cyan for better visibility
+      // If we have results, we usually hide the raw path or draw it underneath?
+      // Let's draw raw path if no results, or faint if results exist.
+      if (!m_drone_path_results.empty())
+        path_col = IM_COL32(0, 255, 255, 50);
+
+      draw_list->AddPolyline(path_points.data(), path_points.size(), path_col, false, 3.0f); // Thicker line
+    }
+
+    // Draw Waypoints
+    for (const auto &p : path_points)
+    {
+      draw_list->AddCircleFilled(p, 3.0f, IM_COL32(255, 255, 255, 200));
+    }
+
+    // Draw rubber band line if drawing
+    if (m_tool_state == tool_state_t::DronePath_Draw)
+    {
+      ImVec2 last_p = path_points.back();
+      ImVec2 mouse_p = ImGui::GetMousePos();
+      draw_list->AddLine(last_p, mouse_p, IM_COL32(255, 255, 0, 150), 1.0f);
+    }
+  }
+
+  // B. Simulation Results (Colored Segments)
+  // B. Simulation Results (Colored Segments)
+  if (!m_drone_path_results.empty())
+  {
+    // Signal > -70 (Green), -70 to -90 (Yellow/Orange), < -90 (Red)
+    auto get_col = [](double dbm, bool blocked) -> ImU32
+    {
+      if (blocked)
+        return IM_COL32(100, 100, 100, 200); // Grey if blocked (although simulation logic sets low dbm)
+      if (dbm > -70)
+        return IM_COL32(0, 255, 0, 255);
+      if (dbm > -85)
+        return IM_COL32(255, 255, 0, 255);
+      if (dbm > -95)
+        return IM_COL32(255, 128, 0, 255);
+      return IM_COL32(255, 0, 0, 255);
+    };
+
+    for (size_t i = 0; i < m_drone_path_results.size() - 1; ++i)
+    {
+      const auto &res1 = m_drone_path_results[i];
+      const auto &res2 = m_drone_path_results[i + 1];
+      ImVec2 p1 = lat_lon_to_screen(res1.lat, res1.lon, canvas_p0, canvas_sz);
+      ImVec2 p2 = lat_lon_to_screen(res2.lat, res2.lon, canvas_p0, canvas_sz);
+      ImU32 c1 = get_col(res1.signal_dbm, res1.los_blocked);
+      draw_list->AddLine(p1, p2, c1, 3.0f);
+    }
+  }
+
+  // C. Hover Highlight (Dot on Map)
+  if (m_highlight_path_index >= 0 && m_highlight_path_index < static_cast<int>(m_drone_path_results.size()))
+  {
+    const auto &res = m_drone_path_results[m_highlight_path_index];
+    ImVec2 p = lat_lon_to_screen(res.lat, res.lon, canvas_p0, canvas_sz);
+    draw_list->AddCircleFilled(p, 8.0f, IM_COL32(255, 255, 255, 255));
+    draw_list->AddCircle(p, 10.0f, IM_COL32(0, 0, 0, 255), 0, 2.0f);
   }
 
   // --- Draw All Sensors ---

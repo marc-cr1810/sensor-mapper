@@ -231,6 +231,51 @@ public:
     return m_show_target_area;
   }
 
+  // Drone Path
+  auto start_drone_path() -> void
+  {
+    m_tool_state = tool_state_t::DronePath_Draw;
+    m_drone_path.clear();
+    m_drone_path_results.clear();
+  }
+  auto clear_drone_path() -> void
+  {
+    m_drone_path.clear();
+    m_drone_path_results.clear();
+    if (m_tool_state == tool_state_t::DronePath_Draw)
+      m_tool_state = tool_state_t::Navigate;
+  }
+  auto get_drone_path() const -> const std::vector<std::pair<double, double>> &
+  {
+    return m_drone_path;
+  }
+
+  auto set_highlight_path_index(int idx) -> void
+  {
+    m_highlight_path_index = idx;
+  }
+
+  // Forward declare SimulationResult to avoid include leak?
+  // Probably better to include simulation_engine.hpp or just use a simplified struct/void* if we want to minimize deps.
+  // But for now, let's assume valid include or forward decl.
+  // Actually, let's add the include to the top of the file or use a separate getter for results.
+  // Assuming we need to store results to render them on map (e.g. colored path segments).
+
+  struct drone_path_result_visual_t
+  {
+    double lat, lon;
+    double signal_dbm;
+    bool los_blocked;
+  };
+  auto set_drone_path_results(const std::vector<drone_path_result_visual_t> &results) -> void
+  {
+    m_drone_path_results = results;
+  }
+  auto get_drone_path_results() const -> const std::vector<drone_path_result_visual_t> &
+  {
+    return m_drone_path_results;
+  }
+
   auto get_timing_jitter_ns() const -> float
   {
     return m_timing_jitter_ns;
@@ -258,7 +303,8 @@ public:
   {
     Navigate,
     PathProfile_SelectA,
-    PathProfile_SelectB
+    PathProfile_SelectB,
+    DronePath_Draw
   };
 
   auto get_tool_state() const -> tool_state_t
@@ -459,6 +505,10 @@ private:
   bool m_is_drawing_polygon = false;
   bool m_show_target_area = true;
   std::vector<std::pair<double, double>> m_target_polygon;
+
+  std::vector<std::pair<double, double>> m_drone_path;
+  std::vector<drone_path_result_visual_t> m_drone_path_results;
+  int m_highlight_path_index = -1;
 };
 
 } // namespace sensor_mapper

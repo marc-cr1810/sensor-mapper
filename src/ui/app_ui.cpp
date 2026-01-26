@@ -194,6 +194,12 @@ void AppUI::render(map_widget_t &map, std::vector<sensor_t> &sensors, std::set<i
     render_auto_placement(map);
   }
 
+  if (m_show_simulation)
+  {
+    // Pass nullptr for building service for now as it's not exposed via map public API yet
+    m_simulation_ui.render(m_show_simulation, map, sensors, elevation_service, nullptr);
+  }
+
   // Status Bar
   if (ImGui::BeginViewportSideBar("##MainStatusBar", ImGui::GetMainViewport(), ImGuiDir_Down, ImGui::GetFrameHeight(), ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_MenuBar))
   {
@@ -333,6 +339,7 @@ void AppUI::render_main_menu(std::vector<sensor_t> &sensors, std::set<int> &sele
     if (ImGui::BeginMenu("Tools"))
     {
       ImGui::MenuItem("Auto Sensor Placement", nullptr, &m_show_auto_placement);
+      ImGui::MenuItem("Drone Path Simulation", nullptr, &m_show_simulation);
       ImGui::EndMenu();
     }
     ImGui::EndMainMenuBar();

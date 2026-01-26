@@ -160,6 +160,8 @@ set(SOURCES_CORE
   src/core/geotiff_source.hpp
   src/core/lidar_source.cpp
   src/core/lidar_source.hpp
+  src/core/simulation_engine.cpp
+  src/core/simulation_engine.hpp
 )
 
 set(SOURCES_RENDERER
@@ -180,6 +182,8 @@ set(SOURCES_UI
   src/ui/antenna_pattern_3d_viewer.hpp
   src/ui/image_exporter.cpp
   src/ui/image_exporter.hpp
+  src/ui/simulation_ui.cpp
+  src/ui/simulation_ui.hpp
 )
 
 set(SOURCES
