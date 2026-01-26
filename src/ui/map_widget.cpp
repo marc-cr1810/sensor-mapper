@@ -503,10 +503,16 @@ auto map_widget_t::draw(std::vector<sensor_t> &sensors, std::set<int> &selected_
 
     auto buildings = m_building_service->get_buildings_in_area(min_lat, max_lat, min_lon, max_lon);
 
+    std::set<std::string> rendered_ids;
     for (const auto *building : buildings)
     {
       if (!building || building->footprint.empty())
         continue;
+
+      // Deduplicate
+      if (rendered_ids.count(building->id))
+        continue;
+      rendered_ids.insert(building->id);
 
       // Draw footprint
       std::vector<ImVec2> screen_points;
@@ -544,17 +550,29 @@ auto map_widget_t::draw(std::vector<sensor_t> &sensors, std::set<int> &selected_
         ImU32 fill_color = IM_COL32(100, 100, 100, 150);
         ImU32 outline_color = IM_COL32(200, 200, 200, 255);
 
+        // Check Hover Early for visual feedback
+        bool is_hovered_building = false;
+        if (m_selection_mode != SelectionMode::None)
+        {
+          if (mouse_pos_screen_current.x >= min_x && mouse_pos_screen_current.x <= max_x && mouse_pos_screen_current.y >= min_y && mouse_pos_screen_current.y <= max_y)
+          {
+            is_hovered_building = true;
+            fill_color = IM_COL32(100, 150, 255, 200); // Blue Highlight
+            outline_color = IM_COL32(150, 200, 255, 255);
+          }
+        }
+
         bool is_priority = m_priority_buildings.count(building->id);
         bool is_excluded = m_excluded_buildings.count(building->id);
 
         if (is_priority)
         {
-          fill_color = IM_COL32(50, 200, 50, 180); // Green
+          fill_color = is_hovered_building ? IM_COL32(70, 230, 70, 220) : IM_COL32(50, 200, 50, 180); // Green
           outline_color = IM_COL32(100, 255, 100, 255);
         }
         else if (is_excluded)
         {
-          fill_color = IM_COL32(200, 50, 50, 180); // Red
+          fill_color = is_hovered_building ? IM_COL32(230, 70, 70, 220) : IM_COL32(200, 50, 50, 180); // Red
           outline_color = IM_COL32(255, 100, 100, 255);
         }
 

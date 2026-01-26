@@ -1075,13 +1075,40 @@ void AppUI::render_auto_placement(map_widget_t &map)
       if (!m_opt_use_buildings || map.has_buildings_for_area(min_lat, max_lat, min_lon, max_lon) || (active == 0 && queued == 0))
       {
         m_waiting_for_buildings = false;
-        // DO NOT Auto-Start.
-        // Just let it fall through to "Optimize Placement" button.
+
+        if (m_opt_start_pending)
+        {
+          m_opt_start_pending = false;
+          // Start Optimizer
+          optimizer_config_t config;
+          config.use_buildings = m_opt_use_buildings;
+          config.use_terrain = m_opt_use_terrain;
+          config.sensor_count = m_opt_sensor_count;
+          config.strategy = static_cast<OptimizationStrategy>(strategy_idx);
+
+          // Copy buildings in area for the background thread
+          auto building_ptrs = map.get_buildings_in_area(min_lat, max_lat, min_lon, max_lon);
+          for (auto b_ptr : building_ptrs)
+          {
+            if (b_ptr)
+              config.buildings.push_back(*b_ptr);
+          }
+
+          // Pass Selection Lists
+          auto &p_set = map.get_priority_buildings();
+          config.priority_building_ids.assign(p_set.begin(), p_set.end());
+          auto &e_set = map.get_excluded_buildings();
+          config.excluded_building_ids.assign(e_set.begin(), e_set.end());
+          config.restrict_to_priority = map.get_restrict_to_priority();
+
+          m_optimizer->start(polygon, config);
+        }
       }
 
       if (ImGui::Button("Cancel", ImVec2(-1, 20)))
       {
         m_waiting_for_buildings = false;
+        m_opt_start_pending = false;
       }
     }
     // Note: We use 'else if' or just 'else' here?
@@ -1091,7 +1118,6 @@ void AppUI::render_auto_placement(map_widget_t &map)
     {
       if (ImGui::Button("Optimize Placement", ImVec2(-1, 40)))
       {
-        // Trigger building fetch for the area
         double min_lat = 90.0, max_lat = -90.0, min_lon = 180.0, max_lon = -180.0;
         for (const auto &p : polygon)
         {
@@ -1100,10 +1126,42 @@ void AppUI::render_auto_placement(map_widget_t &map)
           min_lon = std::min(min_lon, p.second);
           max_lon = std::max(max_lon, p.second);
         }
-        map.fetch_buildings_in_area(min_lat, max_lat, min_lon, max_lon);
 
-        // Enter wait state
-        m_waiting_for_buildings = true;
+        // Final check: do we need a fetch?
+        if (m_opt_use_buildings && !map.has_buildings_for_area(min_lat, max_lat, min_lon, max_lon))
+        {
+          map.fetch_buildings_in_area(min_lat, max_lat, min_lon, max_lon);
+          m_waiting_for_buildings = true;
+          m_opt_start_pending = true; // Auto start when done
+        }
+        else
+        {
+          // Start Optimizer immediately
+          optimizer_config_t config;
+          config.use_buildings = m_opt_use_buildings;
+          config.use_terrain = m_opt_use_terrain;
+          config.sensor_count = m_opt_sensor_count;
+          config.strategy = static_cast<OptimizationStrategy>(strategy_idx);
+
+          // Copy buildings in area for the background thread
+          auto building_ptrs = map.get_buildings_in_area(min_lat, max_lat, min_lon, max_lon);
+          for (auto b_ptr : building_ptrs)
+          {
+            if (b_ptr)
+              config.buildings.push_back(*b_ptr);
+          }
+
+          // Pass Selection Lists
+          auto &p_set = map.get_priority_buildings();
+          config.priority_building_ids.assign(p_set.begin(), p_set.end());
+
+          auto &e_set = map.get_excluded_buildings();
+          config.excluded_building_ids.assign(e_set.begin(), e_set.end());
+
+          config.restrict_to_priority = map.get_restrict_to_priority();
+
+          m_optimizer->start(polygon, config);
+        }
       }
     }
   }

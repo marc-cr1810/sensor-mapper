@@ -39,6 +39,7 @@ private:
   bool m_show_tdoa_analysis = true;
   bool m_show_auto_placement = false;
   bool m_waiting_for_buildings = false;
+  bool m_opt_start_pending = false;
 
   // Optimization Settings
   bool m_opt_use_buildings = true;

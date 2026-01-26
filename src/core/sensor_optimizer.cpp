@@ -108,6 +108,7 @@ void sensor_optimizer_t::run_internal(std::vector<std::pair<double, double>> are
   // 1. Gather buildings centers inside polygon
   if (config.use_buildings)
   {
+    std::cout << "Optimizer: Evaluating " << config.buildings.size() << " buildings..." << std::endl;
     for (const auto &b : config.buildings)
     {
       double clat = 0, clon = 0;
@@ -153,6 +154,7 @@ void sensor_optimizer_t::run_internal(std::vector<std::pair<double, double>> are
         building_candidates.push_back({{clat, clon}, b.id});
       }
     }
+    std::cout << "Optimizer: Found " << building_candidates.size() << " buildings inside target area." << std::endl;
   }
 
   // 2. Generate random points within polygon (Terrain Mode)
