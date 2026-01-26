@@ -168,7 +168,7 @@ static std::vector<int> triangulate_polygon(const std::vector<ImVec2> &clean_poi
   return result;
 }
 
-map_widget_t::map_widget_t() : m_center_lat(-33.8688), m_center_lon(151.2093), m_zoom(14.0), m_show_rf_gradient(false), m_show_raster_visual(false)
+map_widget_t::map_widget_t() : m_center_lat(-33.8688), m_center_lon(151.2093), m_zoom(14.0), m_show_rf_gradient(false), m_show_heatmap_overlay(true), m_show_raster_visual(false)
 {
   m_tile_service = std::make_unique<tile_service_t>();
   m_building_service = std::make_unique<building_service_t>();
@@ -918,42 +918,6 @@ auto map_widget_t::draw(std::vector<sensor_t> &sensors, std::set<int> &selected_
   }
 
   // --- Draw All Sensors ---
-  auto dbm_to_color_lambda = [](double p_rx_dbm) -> ImU32
-  {
-    int r, g, b, a;
-    if (p_rx_dbm >= -60.0)
-    {
-      r = 0;
-      g = 255;
-      b = 0;
-      a = 200;
-    }
-    else if (p_rx_dbm >= -80.0)
-    {
-      float t = static_cast<float>((p_rx_dbm + 80.0) / 20.0);
-      r = static_cast<int>((1.0f - t) * 255.0f);
-      g = 255;
-      b = 0;
-      a = 180;
-    }
-    else if (p_rx_dbm >= -100.0)
-    {
-      float t = static_cast<float>((p_rx_dbm + 100.0) / 20.0);
-      r = 255;
-      g = static_cast<int>(t * 255.0f);
-      b = 0;
-      a = 120;
-    }
-    else
-    {
-      float t = static_cast<float>(std::max(0.0, (p_rx_dbm + 120.0) / 20.0));
-      r = 255;
-      g = 0;
-      b = 0;
-      a = static_cast<int>(t * 80.0f);
-    }
-    return IM_COL32(r, g, b, a);
-  };
 
   if (m_show_composite || m_show_heatmap_overlay)
   {
@@ -1086,67 +1050,6 @@ auto map_widget_t::draw(std::vector<sensor_t> &sensors, std::set<int> &selected_
         float y1 = static_cast<float>((tex_max_wy - center_wy) * world_size_pixels + screen_center.y);
 
         draw_list->AddImage((ImTextureID)(intptr_t)m_heatmap_texture_id, ImVec2(x0, y0), ImVec2(x1, y1), ImVec2(0, 0), ImVec2(1, 1), IM_COL32(255, 255, 255, 200));
-      }
-    }
-
-    // Draw Markers Only
-    for (size_t idx = 0; idx < sensors.size(); ++idx)
-    {
-      const auto &sensor = sensors[idx];
-      bool is_selected = selected_indices.contains(static_cast<int>(idx));
-
-      // Calculate center screen pos
-      double s_lat = sensor.get_latitude();
-      double s_lon = sensor.get_longitude();
-      double c_wx, c_wy;
-      geo::lat_lon_to_world(s_lat, s_lon, c_wx, c_wy);
-      if (c_wx - center_wx > 0.5)
-        c_wx -= 1.0;
-      if (c_wx - center_wx < -0.5)
-        c_wx += 1.0;
-
-      float cx = static_cast<float>((c_wx - center_wx) * world_size_pixels + screen_center.x);
-      float cy = static_cast<float>((c_wy - center_wy) * world_size_pixels + screen_center.y);
-
-      auto col = sensor.get_color();
-      ImU32 marker_col = IM_COL32(static_cast<int>(col[0] * 255), static_cast<int>(col[1] * 255), static_cast<int>(col[2] * 255), 255);
-      draw_list->AddCircleFilled(ImVec2(cx, cy), 5.0f, marker_col);
-      if (is_selected)
-      {
-        draw_list->AddCircle(ImVec2(cx, cy), 8.0f, IM_COL32(255, 255, 0, 255), 0, 2.0f);
-      }
-
-      // Hit Test
-      if (is_hovered)
-      {
-        float dx = io.MousePos.x - cx;
-        float dy = io.MousePos.y - cy;
-        if (dx * dx + dy * dy < 100.0f)
-        {
-          if (ImGui::IsMouseClicked(ImGuiMouseButton_Left))
-          {
-            if (ImGui::GetIO().KeyCtrl)
-            {
-              if (is_selected)
-                selected_indices.erase(static_cast<int>(idx));
-              else
-                selected_indices.insert(static_cast<int>(idx));
-            }
-            else if (ImGui::GetIO().KeyShift)
-            {
-              selected_indices.insert(static_cast<int>(idx));
-            }
-            else
-            {
-              if (!is_selected)
-              {
-                selected_indices.clear();
-                selected_indices.insert(static_cast<int>(idx));
-              }
-            }
-            m_dragging_sensor_index = static_cast<int>(idx);
-          }
-        }
       }
     }
   }
@@ -1287,6 +1190,7 @@ auto map_widget_t::draw(std::vector<sensor_t> &sensors, std::set<int> &selected_
   }
 
   // --- Draw All Sensors (Markers always, Coverage selectively) ---
+  bool sensor_clicked = false;
   {
     // Normal Rendering Loop
     for (size_t idx = 0; idx < sensors.size(); ++idx)
@@ -1295,374 +1199,6 @@ auto map_widget_t::draw(std::vector<sensor_t> &sensors, std::set<int> &selected_
       bool is_selected = selected_indices.contains(static_cast<int>(idx));
       double s_lat = sensor.get_latitude();
       double s_lon = sensor.get_longitude();
-      double range_m = sensor.get_range();
-
-      // Attempt to get elevation for Occlusion Casting
-      float sensor_h;
-      bool has_elevation = false;
-
-      if (sensor.get_use_auto_elevation())
-      {
-        has_elevation = elevation_service.get_elevation(s_lat, s_lon, sensor_h);
-        if (!has_elevation)
-        {
-          sensor_h = 0.0f; // Default to sea level if no data yet
-        }
-      }
-      else
-      {
-        sensor_h = static_cast<float>(sensor.get_ground_elevation());
-        has_elevation = true;
-      }
-
-      // Add mast height
-      sensor_h += static_cast<float>(sensor.get_mast_height());
-
-      // --- Caching Logic ---
-      // Create a unique hash key for the current state of the sensor view
-      std::string current_hash = std::format("{:.6f}_{:.6f}_{:.1f}_{:.1f}_{}", s_lat, s_lon, range_m, (double)sensor_h,
-                                             has_elevation); // sensor_h includes mast + ground
-
-      // Add Directional & Model parameters to hash
-      double azimuth_deg = sensor.get_azimuth_deg();
-      double beamwidth_deg = sensor.get_beamwidth_deg();
-      PropagationModel prop_model = sensor.get_propagation_model();
-
-      // Add antenna pattern to hash to invalidate cache when pattern changes
-      auto pattern = sensor.get_pattern();
-      std::string pattern_name = pattern ? pattern->name : "none";
-
-      current_hash += std::format("_{:.1f}_{:.1f}_{}_{}", azimuth_deg, beamwidth_deg, static_cast<int>(prop_model), pattern_name);
-
-      // Check Cache
-      bool cache_valid = false;
-      const std::string &s_id = sensor.get_id();
-      auto cache_it = m_view_cache.find(s_id);
-
-      // Prepare points vector
-      std::vector<ImVec2> points;
-
-      // Note: We need world-space points later for drawing, but the cache
-      // should store relative or world? The drawing logic converts lat/lon to
-      // world to screen. Screen depends on Zoom/Center. So we CANNOT cache screen coords if we Pan/Zoom. We MUST
-      // cache the resulting polygon vertices in Lat/Lon (or World Space). Let's
-      // modify the loop to generate Lat/Lon points, then a second pass to
-      // convert to Screen.
-
-      if (cache_it != m_view_cache.end() && cache_it->second.hash_key == current_hash)
-      {
-        if (!m_show_heatmap_overlay)
-        {
-          const auto &cached_latlons = cache_it->second.points;
-          points.reserve(cached_latlons.size());
-
-          for (const auto &pt : cached_latlons)
-          {
-            double p_lat = pt.x;
-            double p_lon = pt.y;
-            double p_wx, p_wy;
-            geo::lat_lon_to_world(p_lat, p_lon, p_wx, p_wy);
-
-            // Simple Wrap check
-            if (p_wx - center_wx > 0.5)
-              p_wx -= 1.0;
-            if (p_wx - center_wx < -0.5)
-              p_wx += 1.0;
-
-            float px = static_cast<float>((p_wx - center_wx) * world_size_pixels + screen_center.x);
-            float py = static_cast<float>((p_wy - center_wy) * world_size_pixels + screen_center.y);
-            points.push_back(ImVec2(px, py));
-          }
-        }
-        cache_valid = true;
-      }
-
-      if (!cache_valid && !m_show_heatmap_overlay)
-      {
-        // Cache Miss - Recalculate
-        const int segments = 360; // 1 degree precision
-        std::vector<ImVec2> new_cache_latlons;
-        std::vector<double> new_cache_signal_dbm;
-        new_cache_latlons.reserve(segments);
-        new_cache_signal_dbm.reserve(segments);
-        points.reserve(segments);
-
-        // Get RF parameters for propagation calculation
-        double tx_power_dbm = sensor.get_tx_power_dbm();
-        double frequency_mhz = sensor.get_frequency_mhz();
-        double tx_gain_dbi = sensor.get_tx_antenna_gain_dbi();
-        double rx_gain_dbi = sensor.get_rx_antenna_gain_dbi();
-        double rx_sensitivity_dbm = sensor.get_rx_sensitivity_dbm();
-
-        for (int i = 0; i < segments; ++i)
-        {
-          double angle = (360.0 / segments) * i;
-
-          // Start at max range and work inward to find edge of coverage
-          double coverage_dist = range_m;
-
-          // Search for coverage boundary using binary search-like approach
-          double min_dist = 0.0;
-          double max_dist = range_m;
-          const int search_steps = 20; // Precision of coverage boundary
-
-          for (int step = 0; step < search_steps; ++step)
-          {
-            double test_dist = (min_dist + max_dist) / 2.0;
-            if (test_dist < 10.0)
-              break; // Minimum distance
-
-            double t_lat, t_lon;
-            geo::destination_point(s_lat, s_lon, test_dist, angle, t_lat, t_lon);
-
-            // Calculate Path Loss based on Model
-            double d_km = test_dist / 1000.0;
-            double path_loss_db = 0.0;
-            if (prop_model == PropagationModel::FreeSpace)
-            {
-              path_loss_db = rf_models::calculate_fspl(d_km, frequency_mhz);
-            }
-            else
-            {
-              // Assume 2m receiver height
-              path_loss_db = rf_models::calculate_hata(d_km, frequency_mhz, sensor_h, 2.0, prop_model);
-            }
-
-            // Calculate terrain attenuation
-            double terrain_loss_db = 0.0;
-            if (has_elevation)
-            {
-              float target_h_at_pt; // Renamed to avoid shadowing
-              if (elevation_service.get_elevation(t_lat, t_lon, target_h_at_pt))
-              {
-                // Check line-of-sight obstruction
-                const double step_size = 50.0;
-                double current_dist = 0.0;
-
-                double penetration_depth = 0.0;
-
-                while (current_dist < test_dist)
-                {
-                  current_dist += step_size;
-                  if (current_dist > test_dist)
-                    current_dist = test_dist;
-
-                  double check_lat, check_lon;
-                  geo::destination_point(s_lat, s_lon, current_dist, angle, check_lat, check_lon);
-
-                  float check_h;
-                  if (elevation_service.get_elevation(check_lat, check_lon, check_h))
-                  {
-                    // Calculate expected height on LOS path
-                    double progress = current_dist / test_dist;
-                    double expected_h = sensor_h + (target_h_at_pt - sensor_h) * progress;
-
-                    // Check for terrain obstruction
-                    if (check_h > expected_h)
-                    {
-                      penetration_depth += (check_h - expected_h);
-                    }
-                  }
-
-                  if (current_dist >= test_dist)
-                    break;
-                }
-
-                // Simplified terrain loss: ~10 dB per meter of penetration
-                // (This is a conservative estimate; adjust based on
-                // terrain/frequency)
-                terrain_loss_db = penetration_depth * 10.0;
-              }
-            }
-
-            // Calculate building attenuation
-            double building_loss_db = 0.0;
-            if (m_building_service)
-            {
-              geo_point_t start = {s_lat, s_lon};
-              geo_point_t end = {t_lat, t_lon};
-              auto buildings = m_building_service->get_buildings_on_path(start, end);
-
-              for (const auto &ix : buildings)
-              {
-                // Check if valid intersection
-                if (ix.building && ix.distance_through_m > 0.1)
-                {
-                  // Check height - does line of sight go over the building?
-                  // Need building ground elevation. Assuming flat-ish/terrain
-                  // elevation at sensor? Let's refine: Building base height =
-                  // terrain height at entry point Ray height at entry point =
-                  // sensor_h + (target_h - sensor_h) * progress
-
-                  // Optimization: Just apply flat 15dB if it hits, assuming
-                  // it's tall enough. Or use building->height_m.
-
-                  // Simplified: If sensor is lower than building + 20m, apply
-                  // attenuation. Ideally we interpolate terrain height at
-                  // intersection point. For now, raw meters of concrete
-                  // penetration.
-
-                  // ITU-R P.2040 for concrete at 1GHz ~ 10-20 dB?
-                  // Let's say 15 dB per wall (entry/exit) -> 30dB total + 0.5
-                  // dB/m? Simple model: 20dB per building penetration.
-                  building_loss_db += 20.0;
-                }
-              }
-            }
-
-            // Calculate Antenna Pattern Loss using actual antenna pattern
-            double antenna_pattern_gain = sensor.get_antenna_gain(angle);
-            double antenna_pattern_loss = -antenna_pattern_gain; // Convert gain to loss
-
-            // Calculate received power
-            // P_rx = P_tx + G_tx + G_rx - Path_Loss - Terrain - Building -
-            // Pattern
-            double p_rx_dbm = tx_power_dbm + tx_gain_dbi + rx_gain_dbi - path_loss_db - terrain_loss_db - building_loss_db - antenna_pattern_loss;
-
-            // Check if signal is above sensitivity threshold
-            if (p_rx_dbm >= rx_sensitivity_dbm)
-            {
-              // Signal is receivable, try further out
-              min_dist = test_dist;
-            }
-            else
-            {
-              // Signal too weak, try closer
-              max_dist = test_dist;
-            }
-          }
-
-          coverage_dist = min_dist;
-
-          double p_lat, p_lon;
-          geo::destination_point(s_lat, s_lon, coverage_dist, angle, p_lat, p_lon);
-
-          // Calculate signal strength at this edge point for caching
-          using geo::PI;
-          double lat1_rad = s_lat * PI / 180.0;
-          double lat2_rad = p_lat * PI / 180.0;
-          double delta_lat = (p_lat - s_lat) * PI / 180.0;
-          double delta_lon = (p_lon - s_lon) * PI / 180.0;
-
-          double haversine_a = std::sin(delta_lat / 2.0) * std::sin(delta_lat / 2.0) + std::cos(lat1_rad) * std::cos(lat2_rad) * std::sin(delta_lon / 2.0) * std::sin(delta_lon / 2.0);
-          double c = 2.0 * std::atan2(std::sqrt(haversine_a), std::sqrt(1.0 - haversine_a));
-          double dist_m = geo::EARTH_RADIUS * c;
-          if (dist_m < 1.0)
-            dist_m = 1.0;
-
-          double d_km = dist_m / 1000.0;
-          double path_loss_db = 0.0;
-          if (prop_model == PropagationModel::FreeSpace)
-          {
-            path_loss_db = rf_models::calculate_fspl(d_km, frequency_mhz);
-          }
-          else
-          {
-            path_loss_db = rf_models::calculate_hata(d_km, frequency_mhz, sensor_h, 2.0, prop_model);
-          }
-
-          // Quick terrain loss (simplified for edge points)
-          double terrain_loss_db = 0.0;
-          if (has_elevation && coverage_dist < range_m * 0.9)
-          {
-            // Only calculate terrain loss for significantly occluded points
-            float h_at_pt; // Renamed to avoid shadowing
-            if (elevation_service.get_elevation(p_lat, p_lon, h_at_pt))
-            {
-              if (h_at_pt > sensor_h + 10.0)
-              {
-                terrain_loss_db = (h_at_pt - sensor_h) * 5.0; // Simplified estimate
-              }
-            }
-          }
-
-          // Recalculate Antenna Pattern Loss for edge point using actual antenna pattern
-          double antenna_pattern_gain = sensor.get_antenna_gain(angle);
-          double antenna_pattern_loss = -antenna_pattern_gain; // Convert gain to loss
-
-          double p_rx_dbm = tx_power_dbm + tx_gain_dbi + rx_gain_dbi - path_loss_db - terrain_loss_db - antenna_pattern_loss;
-
-          // Add to cache (Lat/Lon and Signal Strength)
-          new_cache_latlons.push_back(ImVec2(static_cast<float>(p_lat), static_cast<float>(p_lon)));
-          new_cache_signal_dbm.push_back(p_rx_dbm);
-
-          // Convert to Screen for drawing now
-          double p_wx, p_wy;
-          geo::lat_lon_to_world(p_lat, p_lon, p_wx, p_wy);
-          if (p_wx - center_wx > 0.5)
-            p_wx -= 1.0;
-          if (p_wx - center_wx < -0.5)
-            p_wx += 1.0;
-
-          float px = static_cast<float>((p_wx - center_wx) * world_size_pixels + screen_center.x);
-          float py = static_cast<float>((p_wy - center_wy) * world_size_pixels + screen_center.y);
-
-          points.push_back(ImVec2(px, py));
-        }
-
-        // Update Cache
-        m_view_cache[s_id] = {current_hash, new_cache_latlons, new_cache_signal_dbm};
-        cache_valid = true;
-      }
-
-      // --- Draw Raycast Coverage (Suppress if GPU Heatmap/Composite is active, UNLESS RF Gradient is explicitly requested) ---
-      if (m_show_rf_gradient || (!m_show_heatmap_overlay && !m_show_composite))
-      {
-        // Colors
-        // Range stays green
-        ImU32 fill_col = is_selected ? IM_COL32(0, 255, 0, 100) : IM_COL32(0, 200, 0, 50);
-        ImU32 border_col = is_selected ? IM_COL32(255, 255, 0, 255) : IM_COL32(0, 255, 0, 255);
-        float thickness = is_selected ? 3.0f : 2.0f;
-
-        // Calculate center screen pos (needed for triangle fan)
-        double c_wx, c_wy;
-        geo::lat_lon_to_world(s_lat, s_lon, c_wx, c_wy);
-        if (c_wx - center_wx > 0.5)
-          c_wx -= 1.0;
-        if (c_wx - center_wx < -0.5)
-          c_wx += 1.0;
-
-        float cx_local = static_cast<float>((c_wx - center_wx) * world_size_pixels + screen_center.x);
-        float cy_local = static_cast<float>((c_wy - center_wy) * world_size_pixels + screen_center.y);
-
-        // Draw Fill
-        if (!points.empty())
-        {
-          ImVec2 center_pt = ImVec2(cx_local, cy_local);
-          ImU32 center_col = is_selected ? IM_COL32(0, 255, 0, 220) : IM_COL32(0, 220, 0, 180);
-
-          if (m_show_rf_gradient && !m_view_cache[s_id].signal_dbm.empty())
-          {
-            const ImVec2 uv = ImGui::GetFontTexUvWhitePixel();
-            auto &cached_signal = m_view_cache[s_id].signal_dbm;
-
-            for (size_t i = 0; i < points.size(); ++i)
-            {
-              ImU32 edge_col1 = dbm_to_color_lambda(cached_signal[i]);
-              ImU32 edge_col2 = dbm_to_color_lambda(cached_signal[(i + 1) % points.size()]);
-
-              draw_list->PrimReserve(3, 3);
-              draw_list->PrimWriteVtx(center_pt, uv, center_col);
-              draw_list->PrimWriteVtx(points[i], uv, edge_col1);
-              draw_list->PrimWriteVtx(points[(i + 1) % points.size()], uv, edge_col2);
-              draw_list->PrimWriteIdx((ImDrawIdx)(draw_list->_VtxCurrentIdx - 3));
-              draw_list->PrimWriteIdx((ImDrawIdx)(draw_list->_VtxCurrentIdx - 2));
-              draw_list->PrimWriteIdx((ImDrawIdx)(draw_list->_VtxCurrentIdx - 1));
-            }
-          }
-          else
-          {
-            // Solid Fill Mode (default)
-            for (size_t i = 0; i < points.size(); ++i)
-            {
-              draw_list->AddTriangleFilled(center_pt, points[i], points[(i + 1) % points.size()], fill_col);
-            }
-          }
-        }
-
-        // Draw Border
-        draw_list->AddPolyline(points.data(), (int)points.size(), border_col, true, thickness);
-      }
 
       // --- Draw Markers (Always visible) ---
       auto color_vals = sensor.get_color();
@@ -1694,6 +1230,7 @@ auto map_widget_t::draw(std::vector<sensor_t> &sensors, std::set<int> &selected_
         {
           if (ImGui::IsMouseClicked(ImGuiMouseButton_Left))
           {
+            sensor_clicked = true;
             if (ImGui::GetIO().KeyCtrl)
             {
               if (is_selected)
@@ -1713,16 +1250,67 @@ auto map_widget_t::draw(std::vector<sensor_t> &sensors, std::set<int> &selected_
                 selected_indices.insert(static_cast<int>(idx));
               }
             }
-            m_dragging_sensor_index = static_cast<int>(idx);
+            if (!sensor.is_locked())
+            {
+              m_dragging_sensor_index = static_cast<int>(idx);
+            }
           }
         }
       }
     }
   }
 
+  // Deselection: Click on background (and missed all sensors)
+  if (!sensor_clicked && is_hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+  {
+    // Don't deselect if holding modifier keys (maybe trying to marquee? not impl yet)
+    if (!ImGui::GetIO().KeyCtrl && !ImGui::GetIO().KeyShift)
+    {
+      selected_indices.clear();
+    }
+  }
+
+  // Deselection: Click on background (and missed all sensors)
+  if (!sensor_clicked && is_hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+  {
+    if (!ImGui::GetIO().KeyCtrl && !ImGui::GetIO().KeyShift)
+    {
+      if (m_tool_state == tool_state_t::Navigate)
+        selected_indices.clear();
+    }
+  }
+
   // Draw Context Menu if Open
+  ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(10.0f, 10.0f));
   if (ImGui::BeginPopup("map_context_menu"))
   {
+    // Lock/Unlock Logic for Selection
+    if (!selected_indices.empty())
+    {
+      bool all_locked = true;
+      for (int idx : selected_indices)
+      {
+        if (idx >= 0 && idx < (int)sensors.size())
+        {
+          if (!sensors[idx].is_locked())
+            all_locked = false;
+        }
+      }
+
+      bool new_locked_state = all_locked;
+      if (ImGui::MenuItem("Lock Position", nullptr, &new_locked_state))
+      {
+        for (int idx : selected_indices)
+        {
+          if (idx >= 0 && idx < (int)sensors.size())
+          {
+            sensors[idx].set_locked(new_locked_state);
+          }
+        }
+      }
+      ImGui::Separator();
+    }
+
     ImGui::Text("Location: %.4f, %.4f", m_ctx_lat, m_ctx_lon);
     ImGui::Separator();
     if (ImGui::Selectable("Add Sensor Here"))
@@ -1753,6 +1341,7 @@ auto map_widget_t::draw(std::vector<sensor_t> &sensors, std::set<int> &selected_
     }
     ImGui::EndPopup();
   }
+  ImGui::PopStyleVar();
 
   // Previous Mouse Calc Location (Removed, now done early)
 

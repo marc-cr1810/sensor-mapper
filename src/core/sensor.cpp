@@ -17,7 +17,7 @@ static auto generate_id() -> std::string
 }
 
 sensor_t::sensor_t(const std::string &name, double latitude, double longitude, double range)
-    : m_id(generate_id()), m_name(name), m_latitude(latitude), m_longitude(longitude), m_range(range), m_mast_height(10.0), m_ground_elevation(0.0), m_use_auto_elevation(true), m_color({1.0f, 0.0f, 0.0f}),
+    : m_id(generate_id()), m_name(name), m_latitude(latitude), m_longitude(longitude), m_range(range), m_mast_height(10.0), m_ground_elevation(0.0), m_use_auto_elevation(true), m_locked(false), m_color({1.0f, 0.0f, 0.0f}),
       // RF parameters - defaults for typical LoRa/ISM band drone link
       m_tx_power_dbm(20.0),         // 100mW (typical for ISM band)
       m_frequency_mhz(915.0),       // 915 MHz ISM band (US)
@@ -279,6 +279,16 @@ auto sensor_t::get_propagation_model() const -> PropagationModel
 auto sensor_t::set_propagation_model(PropagationModel model) -> void
 {
   m_propagation_model = model;
+}
+
+auto sensor_t::is_locked() const -> bool
+{
+  return m_locked;
+}
+
+auto sensor_t::set_locked(bool locked) -> void
+{
+  m_locked = locked;
 }
 
 } // namespace sensor_mapper

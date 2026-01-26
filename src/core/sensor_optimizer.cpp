@@ -427,6 +427,7 @@ void sensor_optimizer_t::run_internal(std::vector<std::pair<double, double>> are
     {
       sensor_t s("Auto Sensor " + std::to_string(i + 1), selected[i].pos.first, selected[i].pos.second, 5000.0);
       s.set_mast_height(15.0); // Slightly higher for auto-placed
+      s.set_locked(true);
       m_results.push_back(s);
     }
   }

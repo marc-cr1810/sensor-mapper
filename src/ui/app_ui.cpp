@@ -446,6 +446,14 @@ void AppUI::render_sensor_config(std::vector<sensor_t> &sensors, std::set<int> &
           ImGui::Spacing();
           ImGui::Separator();
           ImGui::TextDisabled("LOCATION");
+          ImGui::SameLine();
+          bool is_locked = sensor.is_locked();
+          // Use a smaller checkbox or text?
+          // "Lock"
+          if (ImGui::Checkbox("Locked", &is_locked))
+          {
+            sensor.set_locked(is_locked);
+          }
 
           double lat = sensor.get_latitude();
           if (ImGui::InputDouble("Lat", &lat, 0.0001, 0.001, "%.6f"))
@@ -815,24 +823,14 @@ void AppUI::render_map_view_controls(map_widget_t &map)
     current_x += actual_width;
   };
 
-  // --- Group 1: RF Visualization Modes (Approx 280px) ---
-  wrap_group(280.0f);
+  // --- Group 1: RF Visualization Modes (Approx 100px) ---
+  wrap_group(100.0f);
   {
-    bool show_rf = map.get_show_rf_gradient();
-    if (ImGui::Checkbox("RF", &show_rf))
-      map.set_show_rf_gradient(show_rf);
-
-    ImGui::SameLine();
-    bool show_comp = map.get_show_composite();
-    if (ImGui::Checkbox("Comp", &show_comp))
-      map.set_show_composite(show_comp);
-
-    ImGui::SameLine();
     bool show_heat = map.get_show_heatmap_overlay();
     if (ImGui::Checkbox("Heat", &show_heat))
       map.set_show_heatmap_overlay(show_heat);
 
-    end_group(280.0f);
+    end_group(100.0f);
   }
 
   // --- Group 2: Special Modes (Approx 160px) ---

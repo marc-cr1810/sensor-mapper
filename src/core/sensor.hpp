@@ -88,6 +88,10 @@ public:
   auto get_propagation_model() const -> PropagationModel;
   auto set_propagation_model(PropagationModel model) -> void;
 
+  // Locking
+  auto is_locked() const -> bool;
+  auto set_locked(bool locked) -> void;
+
 private:
   std::string m_id;
   std::string m_name;
@@ -97,6 +101,7 @@ private:
   double m_mast_height;
   double m_ground_elevation;
   bool m_use_auto_elevation;
+  bool m_locked; // New property
   std::array<float, 3> m_color;
 
   // RF Propagation Parameters
