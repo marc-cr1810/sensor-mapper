@@ -32,6 +32,8 @@ struct building_t
   double height_m;                    // Building height in meters
   material_type_e material;
   std::string id; // OSM building ID
+  std::string name;
+  std::string address;
 };
 
 // Building intersection result

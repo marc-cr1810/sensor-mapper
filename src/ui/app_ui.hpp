@@ -42,7 +42,7 @@ private:
 
   // Optimization Settings
   bool m_opt_use_buildings = true;
-  bool m_opt_use_terrain = true;
+  bool m_opt_use_terrain = false;
   int m_opt_sensor_count = 4;
 
   std::unique_ptr<sensor_optimizer_t> m_optimizer;

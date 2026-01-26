@@ -97,7 +97,12 @@ void sensor_optimizer_t::run_internal(std::vector<std::pair<double, double>> are
   // Phase 2: Candidate Generation
   update_status("Evaluating building locations...", 0.3f);
 
-  std::vector<std::pair<double, double>> building_candidates;
+  struct building_candidate_t
+  {
+    std::pair<double, double> pos;
+    std::string id;
+  };
+  std::vector<building_candidate_t> building_candidates;
   std::vector<std::pair<double, double>> random_candidates;
 
   // 1. Gather buildings centers inside polygon
@@ -116,9 +121,36 @@ void sensor_optimizer_t::run_internal(std::vector<std::pair<double, double>> are
       clat /= b.footprint.size();
       clon /= b.footprint.size();
 
+      // Check Excluded List
+      bool is_excluded = false;
+      for (const auto &ex_id : config.excluded_building_ids)
+      {
+        if (b.id == ex_id)
+        {
+          is_excluded = true;
+          break;
+        }
+      }
+      if (is_excluded)
+        continue;
+
+      // Check Priority List (if restricted)
+      bool is_priority = false;
+      for (const auto &p_id : config.priority_building_ids)
+      {
+        if (b.id == p_id)
+        {
+          is_priority = true;
+          break;
+        }
+      }
+
+      if (config.restrict_to_priority && !is_priority)
+        continue;
+
       if (is_point_in_polygon(clat, clon, area))
       {
-        building_candidates.push_back({clat, clon});
+        building_candidates.push_back({{clat, clon}, b.id});
       }
     }
   }
@@ -164,13 +196,16 @@ void sensor_optimizer_t::run_internal(std::vector<std::pair<double, double>> are
   {
     std::pair<double, double> pos;
     bool is_building;
+    std::string building_id;
   };
   std::vector<candidate_t> pool;
   for (const auto &b : building_candidates)
-    pool.push_back({b, true});
+  {
+    pool.push_back({b.pos, true, b.id});
+  }
 
   for (const auto &r : random_candidates)
-    pool.push_back({r, false});
+    pool.push_back({r, false, ""});
 
   // Shuffle pool
   std::shuffle(pool.begin(), pool.end(), gen);
@@ -243,9 +278,22 @@ void sensor_optimizer_t::run_internal(std::vector<std::pair<double, double>> are
           // We want a mix of "far out" for GDOP and "spread out" for coverage.
           double dist_to_center = geo::distance(pool[i].pos.first, pool[i].pos.second, poly_clat, poly_clon);
 
-          // Metric 3: Building Preference - REMOVED per user request
+          // Metric 3: Building Preference
           // double building_multiplier = pool[i].is_building ? 2.5 : 1.0;
           double building_multiplier = 1.0;
+
+          // Priority Building Boost
+          if (pool[i].is_building)
+          {
+            for (const auto &pid : config.priority_building_ids)
+            {
+              if (pool[i].building_id == pid)
+              {
+                building_multiplier = 2.0; // Boost
+                break;
+              }
+            }
+          }
 
           // Combined Score:
           // - High spacing (prevents clustering)

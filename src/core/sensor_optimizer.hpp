@@ -24,6 +24,11 @@ struct optimizer_config_t
   int sensor_count = 3;
   OptimizationStrategy strategy = OptimizationStrategy::Geometric;
 
+  // Building Selection Constraints
+  std::vector<std::string> priority_building_ids;
+  std::vector<std::string> excluded_building_ids;
+  bool restrict_to_priority = false;
+
   // Data for the background thread
   std::vector<building_t> buildings;
 };

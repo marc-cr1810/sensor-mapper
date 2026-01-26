@@ -270,6 +270,57 @@ public:
     m_show_profile_window = show;
   }
 
+  // Building Labels
+  auto set_show_building_labels(bool show) -> void
+  {
+    m_show_building_labels = show;
+  }
+  auto get_show_building_labels() const -> bool
+  {
+    return m_show_building_labels;
+  }
+
+  // Building Selection
+  enum class SelectionMode
+  {
+    None,
+    Priority,
+    Exclude
+  };
+
+  auto set_selection_mode(SelectionMode mode) -> void
+  {
+    m_selection_mode = mode;
+  }
+  auto get_selection_mode() const -> SelectionMode
+  {
+    return m_selection_mode;
+  }
+
+  auto get_priority_buildings() const -> const std::set<std::string> &
+  {
+    return m_priority_buildings;
+  }
+  auto get_excluded_buildings() const -> const std::set<std::string> &
+  {
+    return m_excluded_buildings;
+  }
+
+  auto clear_building_selection() -> void
+  {
+    m_priority_buildings.clear();
+    m_excluded_buildings.clear();
+  }
+
+  auto get_restrict_to_priority() const -> bool
+  {
+    return m_restrict_to_priority;
+  }
+  auto set_restrict_to_priority(bool restrict) -> void
+  {
+    m_restrict_to_priority = restrict;
+  }
+
 private:
   auto lat_lon_to_screen(double lat, double lon, const ImVec2 &canvas_p0, const ImVec2 &canvas_sz) const -> ImVec2;
   auto screen_to_lat_lon(const ImVec2 &p, const ImVec2 &canvas_p0, const ImVec2 &canvas_sz, double &lat_out, double &lon_out) const -> void;
@@ -289,13 +340,21 @@ private:
   geo_point_t m_profile_b = {0.0, 0.0};
   bool m_has_profile_b = false;
 
+  // Selection State
+  SelectionMode m_selection_mode = SelectionMode::None;
+  std::set<std::string> m_priority_buildings;
+  std::set<std::string> m_excluded_buildings;
+  bool m_restrict_to_priority = false;
+
+  // Visualization State
   bool m_show_rf_gradient;
   bool m_show_composite = false;
+  bool m_show_heatmap_overlay = false;
   bool m_show_buildings = false;
   bool m_show_elevation_sources = false;
+  bool m_show_building_labels = false;
   bool m_show_raster_visual = false;
   int m_viz_mode = 0;
-  bool m_show_heatmap_overlay = true;
 
   float m_min_signal_dbm = -90.0f;
 

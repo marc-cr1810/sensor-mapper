@@ -120,6 +120,20 @@ struct building_service_t::impl_t
           // Parse tags
           const auto &tags = el["tags"];
 
+          if (tags.contains("name"))
+          {
+            building.name = tags["name"].get<std::string>();
+          }
+
+          if (tags.contains("addr:housenumber") && tags.contains("addr:street"))
+          {
+            building.address = tags["addr:housenumber"].get<std::string>() + " " + tags["addr:street"].get<std::string>();
+          }
+          else if (tags.contains("addr:street"))
+          {
+            building.address = tags["addr:street"].get<std::string>();
+          }
+
           if (tags.contains("height"))
           {
             try

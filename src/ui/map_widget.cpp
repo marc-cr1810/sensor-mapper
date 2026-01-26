@@ -481,7 +481,7 @@ auto map_widget_t::draw(std::vector<sensor_t> &sensors, std::set<int> &selected_
   }
 
   // --- Draw Buildings ---
-  if (m_show_buildings && m_building_service)
+  if ((m_show_buildings || m_selection_mode != SelectionMode::None) && m_building_service)
   {
     // Determine visible area
     double min_lat, max_lat, min_lon, max_lon;
@@ -530,58 +530,7 @@ auto map_widget_t::draw(std::vector<sensor_t> &sensors, std::set<int> &selected_
 
       if (screen_points.size() >= 3)
       {
-        // Draw simple filled polygon
-        draw_list->AddConvexPolyFilled(screen_points.data(), screen_points.size(), IM_COL32(100, 100, 100, 150));
-        draw_list->AddPolyline(screen_points.data(), screen_points.size(), IM_COL32(200, 200, 200, 255), true, 1.0f);
-
-        // "3D" Extrusion (fake perspective)
-        // If we want 3D, we need to project "up".
-        // In top-down 2D map, "up" is towards the camera.
-        // A simple way to visualize height is to offset the "roof" based on the
-        // vector from map center to building center (creating a vanishing point
-        // effect), OR just purely based on a fixed "up" vector (isometric-ish).
-        // Let's try a simple "perspective" offset from the center of the screen
-        // to simulate 3D.
-
-        // Calculate building center screen pos
-
-        // Perspective factor: further from center = more tilt.
-        // But height_m needs to be converted to pixels.
-        // 1 meter in pixels approx?
-        // Earth circum ~ 40Mm. World size = 256 * 2^zoom.
-        // pixels_per_meter = world_size_pixels / (40075000.0 * cos(lat))
-        // pixels_per_meter = world_size_pixels / (40075000.0 * cos(lat))
-        double meters_per_pixel = (40075000.0 * std::cos(m_center_lat * 3.14159 / 180.0)) / world_size_pixels;
-        float height_px = static_cast<float>(building->height_m / meters_per_pixel);
-
-        // Vanishing point is screen_center.
-        // Roof points = Base points + (Base points - screen_center) *
-        // scale_factor? Actually, just moving "up" in Y makes it look like we
-        // are looking from South? Let's do a "radial" displacement for a
-        // top-down perspective view.
-
-        std::vector<ImVec2> roof_points;
-        roof_points.reserve(screen_points.size());
-
-        for (const auto &p : screen_points)
-        {
-
-          // Limit dir length to avoid exploding infinity
-          // Just use a fixed "view angle" simulation.
-          // Let's simply offset Y by height_px (isometric view from slightly
-          // below/South) roof_points.push_back(ImVec2(p.x, p.y - height_px));
-          // // Isometric-ish
-
-          // Radial displacement (Fish-eye / True Top-down perspective)
-          // If we are looking straight down at the center, things at the edges
-          // lean out. offset = dir * (height / camera_height_simulation) Assume
-          // camera is at some height? Let's try simple Y offset for now to be
-          // safe and clear.
-          roof_points.push_back(ImVec2(p.x, p.y - height_px));
-        }
-
-        // Culling & LOD Logic
-        // Calculate screen-space bounding box
+        // Calculate Bounds for Interaction & Culling
         float min_x = screen_points[0].x, max_x = screen_points[0].x;
         float min_y = screen_points[0].y, max_y = screen_points[0].y;
         for (const auto &p : screen_points)
@@ -592,55 +541,191 @@ auto map_widget_t::draw(std::vector<sensor_t> &sensors, std::set<int> &selected_
           max_y = std::max(max_y, p.y);
         }
 
-        // Add roof height to bbox
-        if (!roof_points.empty())
+        ImU32 fill_color = IM_COL32(100, 100, 100, 150);
+        ImU32 outline_color = IM_COL32(200, 200, 200, 255);
+
+        bool is_priority = m_priority_buildings.count(building->id);
+        bool is_excluded = m_excluded_buildings.count(building->id);
+
+        if (is_priority)
         {
-          for (const auto &p : roof_points)
+          fill_color = IM_COL32(50, 200, 50, 180); // Green
+          outline_color = IM_COL32(100, 255, 100, 255);
+        }
+        else if (is_excluded)
+        {
+          fill_color = IM_COL32(200, 50, 50, 180); // Red
+          outline_color = IM_COL32(255, 100, 100, 255);
+        }
+
+        // Draw simple filled polygon (Base)
+        draw_list->AddConvexPolyFilled(screen_points.data(), screen_points.size(), fill_color);
+        draw_list->AddPolyline(screen_points.data(), screen_points.size(), outline_color, true, 2.0f);
+
+        // Interaction (Selection Mode)
+        if (m_selection_mode != SelectionMode::None)
+        {
+          // Check Hover (Simple AABB check first, then polygon)
+          if (mouse_pos_screen_current.x >= min_x && mouse_pos_screen_current.x <= max_x && mouse_pos_screen_current.y >= min_y && mouse_pos_screen_current.y <= max_y)
           {
-            min_y = std::min(min_y, p.y); // Roof is above (lower Y)
+            // Check precise polygon?
+            // Using ImGui::IsMouseHoveringRect is AABB.
+            // Let's rely on AABB for responsiveness or do point_in_polygon if needed.
+            // Given the scale, AABB might be enough for tooltips, but clicks need precision?
+            // Let's assume AABB for now for simplicity of this block.
+
+            // Tooltip
+            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8, 8));
+            ImGui::BeginTooltip();
+            if (!building->name.empty())
+            {
+              ImGui::Text("%s", building->name.c_str());
+              ImGui::TextDisabled("%s", building->id.c_str());
+            }
+            else
+            {
+              ImGui::Text("Building ID: %s", building->id.c_str());
+            }
+            ImGui::EndTooltip();
+            ImGui::PopStyleVar();
+
+            // Click to Toggle
+            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+            {
+              if (m_selection_mode == SelectionMode::Priority)
+              {
+                if (is_priority)
+                  m_priority_buildings.erase(building->id);
+                else
+                {
+                  m_priority_buildings.insert(building->id);
+                  m_excluded_buildings.erase(building->id); // Mutually exclusive
+                }
+              }
+              else if (m_selection_mode == SelectionMode::Exclude)
+              {
+                if (is_excluded)
+                  m_excluded_buildings.erase(building->id);
+                else
+                {
+                  m_excluded_buildings.insert(building->id);
+                  m_priority_buildings.erase(building->id);
+                }
+              }
+            }
           }
         }
 
-        float width = max_x - min_x;
-        float height = max_y - min_y;
-
-        // Skip if completely off-screen (with margin)
-        if (max_x < canvas_p0.x || min_x > canvas_p0.x + canvas_sz.x || max_y < canvas_p0.y || min_y > canvas_p0.y + canvas_sz.y)
+        // "3D" Extrusion (fake perspective)
+        if (m_show_buildings)
         {
-          continue;
-        }
+          // If we want 3D, we need to project "up".
+          // In top-down 2D map, "up" is towards the camera.
+          // A simple way to visualize height is to offset the "roof" based on the
+          // vector from map center to building center (creating a vanishing point
+          // effect), OR just purely based on a fixed "up" vector (isometric-ish).
+          // Let's try a simple "perspective" offset from the center of the screen
+          // to simulate 3D.
 
-        // LOD: Skip tiny buildings
-        if (width < 3.0f || height < 3.0f)
-        {
-          // Too small to matter
-          continue;
-        }
+          // Calculate building center screen pos
 
-        // LOD: Simplified drawing for small buildings
-        if (width < 10.0f)
-        {
-          // Draw simple rect
-          draw_list->AddRectFilled(ImVec2(min_x, min_y), ImVec2(max_x, max_y), IM_COL32(100, 100, 100, 150));
-          continue;
-        }
+          // Perspective factor: further from center = more tilt.
+          // But height_m needs to be converted to pixels.
+          // 1 meter in pixels approx?
+          // Earth circum ~ 40Mm. World size = 256 * 2^zoom.
+          // pixels_per_meter = world_size_pixels / (40075000.0 * cos(lat))
+          // pixels_per_meter = world_size_pixels / (40075000.0 * cos(lat))
+          double meters_per_pixel = (40075000.0 * std::cos(m_center_lat * 3.14159 / 180.0)) / world_size_pixels;
+          float height_px = static_cast<float>(building->height_m / meters_per_pixel);
 
-        // Draw Roof
-        draw_list->AddConvexPolyFilled(roof_points.data(), roof_points.size(), IM_COL32(140, 140, 140, 200));
-        draw_list->AddPolyline(roof_points.data(), roof_points.size(), IM_COL32(220, 220, 220, 255), true, 1.0f);
+          // Vanishing point is screen_center.
+          // Roof points = Base points + (Base points - screen_center) *
+          // scale_factor? Actually, just moving "up" in Y makes it look like we
+          // are looking from South? Let's do a "radial" displacement for a
+          // top-down perspective view.
 
-        // Draw Walls (connect base to roof)
-        for (int i = 0; i < static_cast<int>(screen_points.size()); ++i)
-        {
-          size_t next = (static_cast<size_t>(i) + 1) % screen_points.size();
-          ImVec2 p1 = screen_points[static_cast<size_t>(i)];
-          ImVec2 p2 = screen_points[next];
-          ImVec2 r1 = roof_points[static_cast<size_t>(i)];
-          ImVec2 r2 = roof_points[next];
+          std::vector<ImVec2> roof_points;
+          roof_points.reserve(screen_points.size());
 
-          // Draw quad
-          ImVec2 quad[4] = {p1, p2, r2, r1};
-          draw_list->AddConvexPolyFilled(quad, 4, IM_COL32(80, 80, 80, 180));
+          for (const auto &p : screen_points)
+          {
+
+            // Limit dir length to avoid exploding infinity
+            // Just use a fixed "view angle" simulation.
+            // Let's simply offset Y by height_px (isometric view from slightly
+            // below/South) roof_points.push_back(ImVec2(p.x, p.y - height_px));
+            // // Isometric-ish
+
+            // Radial displacement (Fish-eye / True Top-down perspective)
+            // If we are looking straight down at the center, things at the edges
+            // lean out. offset = dir * (height / camera_height_simulation) Assume
+            // camera is at some height? Let's try simple Y offset for now to be
+            // safe and clear.
+            roof_points.push_back(ImVec2(p.x, p.y - height_px));
+          }
+
+          // Culling & LOD Logic
+          // Calculate screen-space bounding box
+          float min_x = screen_points[0].x, max_x = screen_points[0].x;
+          float min_y = screen_points[0].y, max_y = screen_points[0].y;
+          for (const auto &p : screen_points)
+          {
+            min_x = std::min(min_x, p.x);
+            max_x = std::max(max_x, p.x);
+            min_y = std::min(min_y, p.y);
+            max_y = std::max(max_y, p.y);
+          }
+
+          // Add roof height to bbox
+          if (!roof_points.empty())
+          {
+            for (const auto &p : roof_points)
+            {
+              min_y = std::min(min_y, p.y); // Roof is above (lower Y)
+            }
+          }
+
+          float width = max_x - min_x;
+          float height = max_y - min_y;
+
+          // Skip if completely off-screen (with margin)
+          if (max_x < canvas_p0.x || min_x > canvas_p0.x + canvas_sz.x || max_y < canvas_p0.y || min_y > canvas_p0.y + canvas_sz.y)
+          {
+            continue;
+          }
+
+          // LOD: Skip tiny buildings
+          if (width < 3.0f || height < 3.0f)
+          {
+            // Too small to matter
+            continue;
+          }
+
+          // LOD: Simplified drawing for small buildings
+          if (width < 10.0f)
+          {
+            // Draw simple rect
+            draw_list->AddRectFilled(ImVec2(min_x, min_y), ImVec2(max_x, max_y), IM_COL32(100, 100, 100, 150));
+            continue;
+          }
+
+          // Draw Roof
+          draw_list->AddConvexPolyFilled(roof_points.data(), roof_points.size(), IM_COL32(140, 140, 140, 200));
+          draw_list->AddPolyline(roof_points.data(), roof_points.size(), IM_COL32(220, 220, 220, 255), true, 1.0f);
+
+          // Draw Walls (connect base to roof)
+          for (int i = 0; i < static_cast<int>(screen_points.size()); ++i)
+          {
+            size_t next = (static_cast<size_t>(i) + 1) % screen_points.size();
+            ImVec2 p1 = screen_points[static_cast<size_t>(i)];
+            ImVec2 p2 = screen_points[next];
+            ImVec2 r1 = roof_points[static_cast<size_t>(i)];
+            ImVec2 r2 = roof_points[next];
+
+            // Draw quad
+            ImVec2 quad[4] = {p1, p2, r2, r1};
+            draw_list->AddConvexPolyFilled(quad, 4, IM_COL32(80, 80, 80, 180));
+          }
         }
       }
     }
