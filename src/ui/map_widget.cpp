@@ -26,6 +26,61 @@ namespace sensor_mapper
 {
 
 // --- Rendering Helpers ---
+static void sanitize_points(std::vector<ImVec2> &points)
+{
+  if (points.empty())
+    return;
+
+  // Remove duplicate consecutive points
+  std::vector<ImVec2> clean_points;
+  for (const auto &p : points)
+  {
+    if (clean_points.empty())
+    {
+      clean_points.push_back(p);
+      continue;
+    }
+    float dx = p.x - clean_points.back().x;
+    float dy = p.y - clean_points.back().y;
+    if (std::abs(dx) > 0.01f || std::abs(dy) > 0.01f)
+    {
+      clean_points.push_back(p);
+    }
+  }
+
+  // Check closing point again
+  if (clean_points.size() > 2)
+  {
+    float dx = clean_points.back().x - clean_points.front().x;
+    float dy = clean_points.back().y - clean_points.front().y;
+    if (std::abs(dx) < 0.01f && std::abs(dy) < 0.01f)
+      clean_points.pop_back();
+  }
+
+  // Remove Collinear Points
+  if (clean_points.size() > 2)
+  {
+    std::vector<ImVec2> final_points;
+    for (size_t i = 0; i < clean_points.size(); ++i)
+    {
+      size_t prev = (i + clean_points.size() - 1) % clean_points.size();
+      size_t next = (i + 1) % clean_points.size();
+      ImVec2 p1 = clean_points[prev];
+      ImVec2 p2 = clean_points[i];
+      ImVec2 p3 = clean_points[next];
+
+      // Cross product for collinearity (area of triangle)
+      float area = (p2.x - p1.x) * (p3.y - p1.y) - (p2.y - p1.y) * (p3.x - p1.x);
+      if (std::abs(area) > 0.001f)
+      {
+        final_points.push_back(p2);
+      }
+    }
+    clean_points = std::move(final_points);
+  }
+  points = std::move(clean_points);
+}
+
 static bool is_point_in_triangle(ImVec2 p, ImVec2 a, ImVec2 b, ImVec2 c)
 {
   auto cross_product = [](ImVec2 a, ImVec2 b, ImVec2 c) { return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x); };
@@ -35,23 +90,22 @@ static bool is_point_in_triangle(ImVec2 p, ImVec2 a, ImVec2 b, ImVec2 c)
   return (s1 == s2) && (s2 == s3);
 }
 
-static std::vector<int> triangulate_polygon(const std::vector<ImVec2> &points)
+static std::vector<int> triangulate_polygon(const std::vector<ImVec2> &clean_points)
 {
-  if (points.size() < 3)
+  if (clean_points.size() < 3)
     return {};
 
-  // 1. Determine Winding Order (Signed Area)
-  double area = 0;
-  for (size_t i = 0; i < points.size(); i++)
+  // 1. Determine Winding Order
+  double area_sum = 0;
+  for (size_t i = 0; i < clean_points.size(); i++)
   {
-    size_t j = (i + 1) % points.size();
-    area += (double)points[i].x * points[j].y;
-    area -= (double)points[j].x * points[i].y;
+    size_t j = (i + 1) % clean_points.size();
+    area_sum += (double)clean_points[i].x * clean_points[j].y;
+    area_sum -= (double)clean_points[j].x * clean_points[i].y;
   }
-  // area > 0 => CCW (standard), area < 0 => CW
-  bool is_ccw = (area > 0);
+  bool is_ccw = (area_sum > 0);
 
-  std::vector<int> indices(points.size());
+  std::vector<int> indices(clean_points.size());
   for (int i = 0; i < (int)indices.size(); ++i)
     indices[i] = i;
 
@@ -61,7 +115,7 @@ static std::vector<int> triangulate_polygon(const std::vector<ImVec2> &points)
   for (int v = n - 1; n > 2;)
   {
     if (count-- <= 0)
-      break; // Protection for degenerate polygons
+      break;
 
     int u = v;
     if (u >= n)
@@ -73,37 +127,35 @@ static std::vector<int> triangulate_polygon(const std::vector<ImVec2> &points)
     if (w >= n)
       w = 0;
 
-    auto is_ear = [&](int u, int v, int w, int n, const std::vector<int> &indices, const std::vector<ImVec2> &points, bool ccw)
+    auto is_ear = [&](int u, int v, int w, int n_curr, const std::vector<int> &idx_list, const std::vector<ImVec2> &pts, bool ccw)
     {
-      ImVec2 a = points[static_cast<size_t>(indices[static_cast<size_t>(u)])];
-      ImVec2 b = points[static_cast<size_t>(indices[static_cast<size_t>(v)])];
-      ImVec2 c = points[static_cast<size_t>(indices[static_cast<size_t>(w)])];
+      ImVec2 a = pts[static_cast<size_t>(idx_list[static_cast<size_t>(u)])];
+      ImVec2 b = pts[static_cast<size_t>(idx_list[static_cast<size_t>(v)])];
+      ImVec2 c = pts[static_cast<size_t>(idx_list[static_cast<size_t>(w)])];
 
-      // Cross product for convexity check
-      // Sign must match global winding order
       float cp = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
       if (ccw)
       {
         if (cp <= 0.0001f)
-          return false; // Not a convex corner for CCW
+          return false;
       }
       else
       {
         if (cp >= -0.0001f)
-          return false; // Not a convex corner for CW
+          return false;
       }
 
-      for (int p = 0; p < n; p++)
+      for (int p = 0; p < n_curr; p++)
       {
         if (p == u || p == v || p == w)
           continue;
-        if (is_point_in_triangle(points[static_cast<size_t>(indices[static_cast<size_t>(p)])], a, b, c))
+        if (is_point_in_triangle(pts[static_cast<size_t>(idx_list[static_cast<size_t>(p)])], a, b, c))
           return false;
       }
       return true;
     };
 
-    if (is_ear(u, v, w, n, indices, points, is_ccw))
+    if (is_ear(u, v, w, n, indices, clean_points, is_ccw))
     {
       result.push_back(indices[static_cast<size_t>(u)]);
       result.push_back(indices[static_cast<size_t>(v)]);
@@ -577,7 +629,7 @@ auto map_widget_t::draw(std::vector<sensor_t> &sensors, std::set<int> &selected_
     // Determine visible area
     double min_lat, max_lat, min_lon, max_lon;
     geo::world_to_lat_lon(min_wx, min_wy, max_lat,
-                          min_lon); // Y is inverted in world coords usually?
+                          min_lon); // Note Y flip
     // wait, world_to_lat_lon(0,0) -> lat, lon.
     // world Y 0 is Top (Max Lat?), Y 1 is Bottom (Min Lat?) -> Mercator.
     // Let's just convert all corners.
@@ -601,15 +653,15 @@ auto map_widget_t::draw(std::vector<sensor_t> &sensors, std::set<int> &selected_
         continue;
 
       // Visibility Logic:
-      // 1. If we have a target polygon:
+      // 1. If the tool is open (m_show_target_area is true):
       //    - If picking (Priority/Exclude), show ALL.
       //    - If NOT picking, only show if Priority or Excluded.
-      // 2. If no target polygon, follow global m_show_buildings.
+      // 2. If the tool is NOT open, follow global m_show_buildings.
       bool is_priority = m_priority_buildings.count(building->id);
       bool is_excluded = m_excluded_buildings.count(building->id);
       bool is_tagged = is_priority || is_excluded;
 
-      if (!m_target_polygon.empty())
+      if (m_show_target_area)
       {
         bool is_picking = (m_selection_mode != SelectionMode::None);
         if (!is_picking && !is_tagged)
@@ -701,10 +753,16 @@ auto map_widget_t::draw(std::vector<sensor_t> &sensors, std::set<int> &selected_
 
         // --- DRAW 2D BASE ---
         // Robust fill using triangulation (fixes artifacts on concave shapes)
-        std::vector<int> tri_indices = triangulate_polygon(screen_points);
-        for (size_t i = 0; i + 2 < tri_indices.size(); i += 3)
+        std::vector<ImVec2> triang_points = screen_points;
+        sanitize_points(triang_points);
+        std::vector<int> tri_indices = triangulate_polygon(triang_points);
+
+        if (triang_points.size() >= 3)
         {
-          draw_list->AddTriangleFilled(screen_points[static_cast<size_t>(tri_indices[i])], screen_points[static_cast<size_t>(tri_indices[i + 1])], screen_points[static_cast<size_t>(tri_indices[i + 2])], fill_color);
+          for (size_t i = 0; i + 2 < tri_indices.size(); i += 3)
+          {
+            draw_list->AddTriangleFilled(triang_points[static_cast<size_t>(tri_indices[i])], triang_points[static_cast<size_t>(tri_indices[i + 1])], triang_points[static_cast<size_t>(tri_indices[i + 2])], fill_color);
+          }
         }
         draw_list->AddPolyline(screen_points.data(), screen_points.size(), outline_color, true, 2.0f);
 
@@ -757,22 +815,15 @@ auto map_widget_t::draw(std::vector<sensor_t> &sensors, std::set<int> &selected_
         }
 
         // "3D" Extrusion (fake perspective)
-        if (m_show_buildings)
+        // Show 3D whenever the building is visible (respecting LOD), UNLESS the tool is open.
+        if (!m_show_target_area)
         {
           double meters_per_pixel = (40075000.0 * std::cos(m_center_lat * 3.14159 / 180.0)) / world_size_pixels;
           float height_px = static_cast<float>(building->height_m / meters_per_pixel);
 
-          std::vector<ImVec2> roof_points;
-          roof_points.reserve(screen_points.size());
-
-          for (const auto &p : screen_points)
-          {
-            roof_points.push_back(ImVec2(p.x, p.y - height_px));
-          }
-
-          // Culling & LOD Logic
-          float width = max_x - min_x;
-          float height = max_y - min_y;
+          // Culling & LOD Logic (Move UP before point generation)
+          float b_width = max_x - min_x;
+          float b_height = max_y - min_y;
 
           // Skip if completely off-screen (with margin)
           if (max_x < canvas_p0.x || min_x > canvas_p0.x + canvas_sz.x || max_y < canvas_p0.y || min_y > canvas_p0.y + canvas_sz.y)
@@ -780,26 +831,34 @@ auto map_widget_t::draw(std::vector<sensor_t> &sensors, std::set<int> &selected_
             continue;
           }
 
-          // LOD: Skip tiny buildings
-          if (width < 3.0f || height < 3.0f)
+          // LOD: Skip tiny buildings or heights
+          if (b_width < 3.0f || b_height < 3.0f || height_px < 0.5f)
           {
             continue;
           }
 
           // LOD: Simplified drawing for small buildings
-          if (width < 10.0f)
+          if (b_width < 10.0f)
           {
             draw_list->AddRectFilled(ImVec2(min_x, min_y - height_px), ImVec2(max_x, max_y), IM_COL32(100, 100, 100, 150));
             continue;
           }
 
-          // Draw Walls first (connect base to roof)
-          for (int i = 0; i < static_cast<int>(screen_points.size()); ++i)
+          // Generate Roof Points from sanitized triang_points for consistency
+          std::vector<ImVec2> roof_points;
+          roof_points.reserve(triang_points.size());
+          for (const auto &p : triang_points)
           {
-            size_t next = (static_cast<size_t>(i) + 1) % screen_points.size();
-            ImVec2 p1 = screen_points[static_cast<size_t>(i)];
-            ImVec2 p2 = screen_points[next];
-            ImVec2 r1 = roof_points[static_cast<size_t>(i)];
+            roof_points.push_back(ImVec2(p.x, p.y - height_px));
+          }
+
+          // Draw Walls first (connect base to roof) using sanitized points
+          for (size_t i = 0; i < triang_points.size(); ++i)
+          {
+            size_t next = (i + 1) % triang_points.size();
+            ImVec2 p1 = triang_points[i];
+            ImVec2 p2 = triang_points[next];
+            ImVec2 r1 = roof_points[i];
             ImVec2 r2 = roof_points[next];
 
             // Draw quad
@@ -809,9 +868,12 @@ auto map_widget_t::draw(std::vector<sensor_t> &sensors, std::set<int> &selected_
           }
 
           // Draw Roof AFTER walls for correct layering effect
-          for (size_t i = 0; i + 2 < tri_indices.size(); i += 3)
+          if (triang_points.size() >= 3)
           {
-            draw_list->AddTriangleFilled(roof_points[static_cast<size_t>(tri_indices[i])], roof_points[static_cast<size_t>(tri_indices[i + 1])], roof_points[static_cast<size_t>(tri_indices[i + 2])], fill_color);
+            for (size_t i = 0; i + 2 < tri_indices.size(); i += 3)
+            {
+              draw_list->AddTriangleFilled(roof_points[static_cast<size_t>(tri_indices[i])], roof_points[static_cast<size_t>(tri_indices[i + 1])], roof_points[static_cast<size_t>(tri_indices[i + 2])], fill_color);
+            }
           }
           draw_list->AddPolyline(roof_points.data(), roof_points.size(), outline_color, true, 1.5f);
         }
@@ -1761,7 +1823,8 @@ auto map_widget_t::draw(std::vector<sensor_t> &sensors, std::set<int> &selected_
     float px = static_cast<float>((wx - center_wx) * world_size_pixels + screen_center.x);
     float py = static_cast<float>((wy - center_wy) * world_size_pixels + screen_center.y);
 
-    ImVec2 pA = ImVec2(px, py);
+    (void)px;
+    (void)py; // Marker pos
 
     draw_list->AddCircleFilled(ImVec2(px, py), 6.0f, IM_COL32(255, 0, 255, 255));
     draw_list->AddText(ImVec2(px + 8, py - 8), IM_COL32(255, 0, 255, 255), "A");

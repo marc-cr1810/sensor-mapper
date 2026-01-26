@@ -204,6 +204,7 @@ public:
   {
     m_is_drawing_polygon = true;
     m_target_polygon.clear();
+    m_selection_mode = SelectionMode::None;
   }
   auto finish_polygon() -> void
   {
