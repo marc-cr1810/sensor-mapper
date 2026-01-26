@@ -1790,10 +1790,10 @@ auto map_widget_t::draw(std::vector<sensor_t> &sensors, std::set<int> &selected_
   ImVec2 text_size = ImGui::CalcTextSize(info_text.c_str());
   ImVec2 overlay_pos = ImVec2(canvas_p0.x + 10, canvas_p0.y + canvas_sz.y - text_size.y - 10);
 
-  // Draw background
-  draw_list->AddRectFilled(ImVec2(overlay_pos.x - padding, overlay_pos.y - padding), ImVec2(overlay_pos.x + text_size.x + padding, overlay_pos.y + text_size.y + padding), IM_COL32(255, 255, 255, 200), 4.0f);
+  // Draw background - High Contrast
+  draw_list->AddRectFilled(ImVec2(overlay_pos.x - padding, overlay_pos.y - padding), ImVec2(overlay_pos.x + text_size.x + padding, overlay_pos.y + text_size.y + padding), IM_COL32(30, 30, 30, 220), 4.0f);
 
-  draw_list->AddText(overlay_pos, IM_COL32(0, 0, 0, 255), info_text.c_str());
+  draw_list->AddText(overlay_pos, IM_COL32(255, 255, 255, 255), info_text.c_str());
 
   // Draw TDOA Layers (Layered below sensors but above map/buildings)
   if (m_show_tdoa_analysis)
@@ -1866,6 +1866,16 @@ auto map_widget_t::draw(std::vector<sensor_t> &sensors, std::set<int> &selected_
     float py2 = static_cast<float>((wy2 - center_wy) * world_size_pixels + screen_center.y);
 
     draw_list->AddLine(ImVec2(px1, py1), ImVec2(px2, py2), IM_COL32(255, 0, 255, 150), 2.0f);
+  }
+
+  // Draw Scale Bar and Compass (Overlay)
+  if (m_show_scale_bar)
+  {
+    render_scale_bar(draw_list, canvas_p0, canvas_sz);
+  }
+  if (m_show_compass)
+  {
+    render_compass(draw_list, canvas_p0, canvas_sz);
   }
 
   draw_list->PopClipRect();
@@ -2781,6 +2791,98 @@ auto map_widget_t::get_building_loading_status() const -> std::pair<int, int>
   if (!m_building_service)
     return {0, 0};
   return m_building_service->get_loading_status();
+}
+
+auto map_widget_t::render_scale_bar(ImDrawList *draw_list, const ImVec2 &canvas_p0, const ImVec2 &canvas_sz) -> void
+{
+  // Position: Bottom Left, with some padding
+
+  // Calculate Meters per Pixel at current latitude
+  // Earth Circumference at Equator ~ 40,075,017 m
+  // Meters per pixel = C * cos(lat) / 2^(zoom + 8)  (assuming 256px tiles)
+  double world_size_px = 256.0 * std::pow(2.0, m_zoom);
+  double equatorial_circumference = 40075017.0;
+  double lat_rad = m_center_lat * geo::PI / 180.0;
+  double meters_per_pixel = (equatorial_circumference * std::cos(lat_rad)) / world_size_px;
+
+  // Target width in pixels (approx 100px)
+  double target_width_px = 100.0;
+  double target_meters = target_width_px * meters_per_pixel;
+
+  // Round target_meters to nice number (1, 2, 5, 10, 20, 50, 100, 200, 500, 1km, etc)
+  double magnitude = std::pow(10.0, std::floor(std::log10(target_meters)));
+  double residual = target_meters / magnitude;
+  double rounded_meters;
+
+  if (residual > 5.0)
+    rounded_meters = 5.0 * magnitude;
+  else if (residual > 2.0)
+    rounded_meters = 2.0 * magnitude;
+  else
+    rounded_meters = 1.0 * magnitude;
+
+  // Recalculate pixel width
+  float bar_width_px = static_cast<float>(rounded_meters / meters_per_pixel);
+
+  // Draw
+  ImVec2 bar_start = ImVec2(canvas_p0.x + canvas_sz.x - 20.0f - bar_width_px, canvas_p0.y + canvas_sz.y - 9.0f);
+  ImVec2 bar_end = ImVec2(bar_start.x + bar_width_px, bar_start.y);
+
+  // Background for contrast - Darker and more opaque (High Contrast)
+  draw_list->AddRectFilled(ImVec2(bar_start.x - 8, bar_start.y - 18), ImVec2(bar_end.x + 8, bar_start.y + 4), IM_COL32(30, 30, 30, 220), 4.0f);
+
+  // Bar line - White
+  draw_list->AddLine(bar_start, bar_end, IM_COL32(255, 255, 255, 255), 2.0f);
+
+  // Ticks - White
+  draw_list->AddLine(ImVec2(bar_start.x, bar_start.y - 6), ImVec2(bar_start.x, bar_start.y + 0), IM_COL32(255, 255, 255, 255), 2.0f);
+  draw_list->AddLine(ImVec2(bar_end.x, bar_end.y - 6), ImVec2(bar_end.x, bar_end.y + 0), IM_COL32(255, 255, 255, 255), 2.0f);
+
+  // Label
+  std::string label;
+  if (rounded_meters >= 1000.0)
+    label = std::format("{:.0f} km", rounded_meters / 1000.0);
+  else
+    label = std::format("{:.0f} m", rounded_meters);
+
+  ImVec2 text_sz = ImGui::CalcTextSize(label.c_str());
+  ImVec2 text_pos = ImVec2(bar_start.x + (bar_width_px - text_sz.x) * 0.5f, bar_start.y - text_sz.y - 2.0f);
+
+  // Shadow text
+  draw_list->AddText(ImVec2(text_pos.x + 1, text_pos.y + 1), IM_COL32(0, 0, 0, 255), label.c_str());
+  draw_list->AddText(text_pos, IM_COL32(255, 255, 255, 255), label.c_str());
+}
+
+auto map_widget_t::render_compass(ImDrawList *draw_list, const ImVec2 &canvas_p0, const ImVec2 &canvas_sz) -> void
+{
+  // Position: Top Right
+  float pad = 20.0f;
+  float x = canvas_p0.x + canvas_sz.x - pad - 20.0f;
+  float y = canvas_p0.y + pad + 30.0f; // Below menu bar/tabs? Or just Top Right.
+
+  // ImGui::InvisibleButton("map_canvas", canvas_sz); covers the whole area, so inputs might be eaten,
+  // but this is just rendering.
+
+  ImVec2 center = ImVec2(x, y);
+  float radius = 15.0f;
+
+  // Draw Circle Background
+  draw_list->AddCircleFilled(center, radius, IM_COL32(0, 0, 0, 100));
+  draw_list->AddCircle(center, radius, IM_COL32(255, 255, 255, 200), 0, 1.5f);
+
+  // Draw Arrow (North is always Up for now)
+  ImVec2 north = ImVec2(center.x, center.y - radius + 4.0f);
+  ImVec2 south = ImVec2(center.x, center.y + radius - 4.0f);
+  ImVec2 west = ImVec2(center.x - radius * 0.4f, center.y);
+  ImVec2 east = ImVec2(center.x + radius * 0.4f, center.y);
+
+  // Red North Tip
+  draw_list->AddTriangleFilled(north, west, east, IM_COL32(255, 50, 50, 255));
+
+  // White South Tail
+  draw_list->AddTriangleFilled(south, west, east, IM_COL32(230, 230, 230, 255));
+
+  // N label
 }
 
 } // namespace sensor_mapper

@@ -865,6 +865,21 @@ void AppUI::render_map_view_controls(map_widget_t &map)
     end_group(140.0f);
   }
 
+  // --- Group 4: Overlays (Approx 160px) ---
+  wrap_group(160.0f);
+  {
+    bool show_scale = map.get_show_scale_bar();
+    if (ImGui::Checkbox("Scale", &show_scale))
+      map.set_show_scale_bar(show_scale);
+
+    ImGui::SameLine();
+    bool show_compass = map.get_show_compass();
+    if (ImGui::Checkbox("Compass", &show_compass))
+      map.set_show_compass(show_compass);
+
+    end_group(160.0f);
+  }
+
   // --- Group 4: Config & Tools (Approx 400px) ---
   wrap_group(400.0f);
   {

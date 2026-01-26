@@ -306,6 +306,24 @@ public:
     return m_selection_mode;
   }
 
+  auto get_show_scale_bar() const -> bool
+  {
+    return m_show_scale_bar;
+  }
+  auto set_show_scale_bar(bool show) -> void
+  {
+    m_show_scale_bar = show;
+  }
+
+  auto get_show_compass() const -> bool
+  {
+    return m_show_compass;
+  }
+  auto set_show_compass(bool show) -> void
+  {
+    m_show_compass = show;
+  }
+
   auto get_priority_buildings() const -> const std::set<std::string> &
   {
     return m_priority_buildings;
@@ -365,6 +383,9 @@ private:
   bool m_show_raster_visual = false;
   int m_viz_mode = 0;
 
+  bool m_show_scale_bar = true;
+  bool m_show_compass = true;
+
   float m_min_signal_dbm = -90.0f;
 
   struct cached_view_t
@@ -409,6 +430,9 @@ private:
   auto render_gdop_contours(const std::vector<sensor_t> &sensors, ImDrawList *draw_list, const ImVec2 &canvas_p0, const ImVec2 &canvas_sz) -> void;
   auto render_accuracy_heatmap(const std::vector<sensor_t> &sensors, ImDrawList *draw_list, const ImVec2 &canvas_p0, const ImVec2 &canvas_sz) -> void;
   auto render_test_point(const std::vector<sensor_t> &sensors, ImDrawList *draw_list, const ImVec2 &canvas_p0, const ImVec2 &canvas_sz) -> void;
+
+  auto render_scale_bar(ImDrawList *draw_list, const ImVec2 &canvas_p0, const ImVec2 &canvas_sz) -> void;
+  auto render_compass(ImDrawList *draw_list, const ImVec2 &canvas_p0, const ImVec2 &canvas_sz) -> void;
 
   auto draw_path_profile_window(elevation_service_t &elevation_service) -> void;
 
