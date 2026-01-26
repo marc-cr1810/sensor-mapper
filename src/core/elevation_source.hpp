@@ -15,19 +15,19 @@ public:
   virtual auto update() -> void = 0;
 
   // param: min_lat, max_lat, min_lon, max_lon
-  virtual auto get_bounds(double &min_lat, double &max_lat, double &min_lon, double &max_lon) const -> bool
+  virtual auto get_bounds(double & /*min_lat*/, double & /*max_lat*/, double & /*min_lon*/, double & /*max_lon*/) const -> bool
   {
     return false;
   }
 
   // Get 4 corners precisely (lat, lon) in order: Top-Left, Top-Right, Bottom-Right, Bottom-Left
-  virtual auto get_bounds_quad(double *lats, double *lons) const -> bool
+  virtual auto get_bounds_quad(double * /*lats*/, double * /*lons*/) const -> bool
   {
     return false;
   }
 
   // Visualization helper: returns a grayscale elevation buffer (0.0 to 1.0) for a thumbnail
-  virtual auto get_visual_data(int &w, int &h) const -> const float *
+  virtual auto get_visual_data(int & /*w*/, int & /*h*/) const -> const float *
   {
     return nullptr;
   }

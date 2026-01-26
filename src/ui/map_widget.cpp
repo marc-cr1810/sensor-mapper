@@ -25,6 +25,97 @@
 namespace sensor_mapper
 {
 
+// --- Rendering Helpers ---
+static bool is_point_in_triangle(ImVec2 p, ImVec2 a, ImVec2 b, ImVec2 c)
+{
+  auto cross_product = [](ImVec2 a, ImVec2 b, ImVec2 c) { return (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x); };
+  bool s1 = cross_product(a, b, p) > 0.0f;
+  bool s2 = cross_product(b, c, p) > 0.0f;
+  bool s3 = cross_product(c, a, p) > 0.0f;
+  return (s1 == s2) && (s2 == s3);
+}
+
+static std::vector<int> triangulate_polygon(const std::vector<ImVec2> &points)
+{
+  if (points.size() < 3)
+    return {};
+
+  // 1. Determine Winding Order (Signed Area)
+  double area = 0;
+  for (size_t i = 0; i < points.size(); i++)
+  {
+    size_t j = (i + 1) % points.size();
+    area += (double)points[i].x * points[j].y;
+    area -= (double)points[j].x * points[i].y;
+  }
+  // area > 0 => CCW (standard), area < 0 => CW
+  bool is_ccw = (area > 0);
+
+  std::vector<int> indices(points.size());
+  for (int i = 0; i < (int)indices.size(); ++i)
+    indices[i] = i;
+
+  std::vector<int> result;
+  int n = static_cast<int>(indices.size());
+  int count = 2 * n;
+  for (int v = n - 1; n > 2;)
+  {
+    if (count-- <= 0)
+      break; // Protection for degenerate polygons
+
+    int u = v;
+    if (u >= n)
+      u = 0;
+    v = u + 1;
+    if (v >= n)
+      v = 0;
+    int w = v + 1;
+    if (w >= n)
+      w = 0;
+
+    auto is_ear = [&](int u, int v, int w, int n, const std::vector<int> &indices, const std::vector<ImVec2> &points, bool ccw)
+    {
+      ImVec2 a = points[static_cast<size_t>(indices[static_cast<size_t>(u)])];
+      ImVec2 b = points[static_cast<size_t>(indices[static_cast<size_t>(v)])];
+      ImVec2 c = points[static_cast<size_t>(indices[static_cast<size_t>(w)])];
+
+      // Cross product for convexity check
+      // Sign must match global winding order
+      float cp = (b.x - a.x) * (c.y - a.y) - (b.y - a.y) * (c.x - a.x);
+      if (ccw)
+      {
+        if (cp <= 0.0001f)
+          return false; // Not a convex corner for CCW
+      }
+      else
+      {
+        if (cp >= -0.0001f)
+          return false; // Not a convex corner for CW
+      }
+
+      for (int p = 0; p < n; p++)
+      {
+        if (p == u || p == v || p == w)
+          continue;
+        if (is_point_in_triangle(points[static_cast<size_t>(indices[static_cast<size_t>(p)])], a, b, c))
+          return false;
+      }
+      return true;
+    };
+
+    if (is_ear(u, v, w, n, indices, points, is_ccw))
+    {
+      result.push_back(indices[static_cast<size_t>(u)]);
+      result.push_back(indices[static_cast<size_t>(v)]);
+      result.push_back(indices[static_cast<size_t>(w)]);
+      indices.erase(indices.begin() + v);
+      n--;
+      count = 2 * n;
+    }
+  }
+  return result;
+}
+
 map_widget_t::map_widget_t() : m_center_lat(-33.8688), m_center_lon(151.2093), m_zoom(14.0), m_show_rf_gradient(false), m_show_raster_visual(false)
 {
   m_tile_service = std::make_unique<tile_service_t>();
@@ -481,7 +572,7 @@ auto map_widget_t::draw(std::vector<sensor_t> &sensors, std::set<int> &selected_
   }
 
   // --- Draw Buildings ---
-  if ((m_show_buildings || m_selection_mode != SelectionMode::None) && m_building_service)
+  if ((m_show_buildings || m_selection_mode != SelectionMode::None || !m_target_polygon.empty()) && m_building_service)
   {
     // Determine visible area
     double min_lat, max_lat, min_lon, max_lon;
@@ -509,6 +600,27 @@ auto map_widget_t::draw(std::vector<sensor_t> &sensors, std::set<int> &selected_
       if (!building || building->footprint.empty())
         continue;
 
+      // Visibility Logic:
+      // 1. If we have a target polygon:
+      //    - If picking (Priority/Exclude), show ALL.
+      //    - If NOT picking, only show if Priority or Excluded.
+      // 2. If no target polygon, follow global m_show_buildings.
+      bool is_priority = m_priority_buildings.count(building->id);
+      bool is_excluded = m_excluded_buildings.count(building->id);
+      bool is_tagged = is_priority || is_excluded;
+
+      if (!m_target_polygon.empty())
+      {
+        bool is_picking = (m_selection_mode != SelectionMode::None);
+        if (!is_picking && !is_tagged)
+          continue;
+      }
+      else
+      {
+        if (!m_show_buildings && !is_tagged)
+          continue;
+      }
+
       // Deduplicate
       if (rendered_ids.count(building->id))
         continue;
@@ -532,6 +644,17 @@ auto map_widget_t::draw(std::vector<sensor_t> &sensors, std::set<int> &selected_
         float px = static_cast<float>((wx - center_wx) * world_size_pixels + screen_center.x);
         float py = static_cast<float>((wy - center_wy) * world_size_pixels + screen_center.y);
         screen_points.push_back(ImVec2(px, py));
+      }
+
+      // Sanitize: OSM often repeats the first point at the end. Remove it for ImGui routines.
+      if (screen_points.size() > 1)
+      {
+        float dx = screen_points.back().x - screen_points.front().x;
+        float dy = screen_points.back().y - screen_points.front().y;
+        if (std::sqrt(dx * dx + dy * dy) < 0.01f)
+        {
+          screen_points.pop_back();
+        }
       }
 
       if (screen_points.size() >= 3)
@@ -576,8 +699,13 @@ auto map_widget_t::draw(std::vector<sensor_t> &sensors, std::set<int> &selected_
           outline_color = IM_COL32(255, 100, 100, 255);
         }
 
-        // Draw simple filled polygon (Base)
-        draw_list->AddConvexPolyFilled(screen_points.data(), screen_points.size(), fill_color);
+        // --- DRAW 2D BASE ---
+        // Robust fill using triangulation (fixes artifacts on concave shapes)
+        std::vector<int> tri_indices = triangulate_polygon(screen_points);
+        for (size_t i = 0; i + 2 < tri_indices.size(); i += 3)
+        {
+          draw_list->AddTriangleFilled(screen_points[static_cast<size_t>(tri_indices[i])], screen_points[static_cast<size_t>(tri_indices[i + 1])], screen_points[static_cast<size_t>(tri_indices[i + 2])], fill_color);
+        }
         draw_list->AddPolyline(screen_points.data(), screen_points.size(), outline_color, true, 2.0f);
 
         // Interaction (Selection Mode)
@@ -586,12 +714,6 @@ auto map_widget_t::draw(std::vector<sensor_t> &sensors, std::set<int> &selected_
           // Check Hover (Simple AABB check first, then polygon)
           if (mouse_pos_screen_current.x >= min_x && mouse_pos_screen_current.x <= max_x && mouse_pos_screen_current.y >= min_y && mouse_pos_screen_current.y <= max_y)
           {
-            // Check precise polygon?
-            // Using ImGui::IsMouseHoveringRect is AABB.
-            // Let's rely on AABB for responsiveness or do point_in_polygon if needed.
-            // Given the scale, AABB might be enough for tooltips, but clicks need precision?
-            // Let's assume AABB for now for simplicity of this block.
-
             // Tooltip
             ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8, 8));
             ImGui::BeginTooltip();
@@ -637,72 +759,18 @@ auto map_widget_t::draw(std::vector<sensor_t> &sensors, std::set<int> &selected_
         // "3D" Extrusion (fake perspective)
         if (m_show_buildings)
         {
-          // If we want 3D, we need to project "up".
-          // In top-down 2D map, "up" is towards the camera.
-          // A simple way to visualize height is to offset the "roof" based on the
-          // vector from map center to building center (creating a vanishing point
-          // effect), OR just purely based on a fixed "up" vector (isometric-ish).
-          // Let's try a simple "perspective" offset from the center of the screen
-          // to simulate 3D.
-
-          // Calculate building center screen pos
-
-          // Perspective factor: further from center = more tilt.
-          // But height_m needs to be converted to pixels.
-          // 1 meter in pixels approx?
-          // Earth circum ~ 40Mm. World size = 256 * 2^zoom.
-          // pixels_per_meter = world_size_pixels / (40075000.0 * cos(lat))
-          // pixels_per_meter = world_size_pixels / (40075000.0 * cos(lat))
           double meters_per_pixel = (40075000.0 * std::cos(m_center_lat * 3.14159 / 180.0)) / world_size_pixels;
           float height_px = static_cast<float>(building->height_m / meters_per_pixel);
-
-          // Vanishing point is screen_center.
-          // Roof points = Base points + (Base points - screen_center) *
-          // scale_factor? Actually, just moving "up" in Y makes it look like we
-          // are looking from South? Let's do a "radial" displacement for a
-          // top-down perspective view.
 
           std::vector<ImVec2> roof_points;
           roof_points.reserve(screen_points.size());
 
           for (const auto &p : screen_points)
           {
-
-            // Limit dir length to avoid exploding infinity
-            // Just use a fixed "view angle" simulation.
-            // Let's simply offset Y by height_px (isometric view from slightly
-            // below/South) roof_points.push_back(ImVec2(p.x, p.y - height_px));
-            // // Isometric-ish
-
-            // Radial displacement (Fish-eye / True Top-down perspective)
-            // If we are looking straight down at the center, things at the edges
-            // lean out. offset = dir * (height / camera_height_simulation) Assume
-            // camera is at some height? Let's try simple Y offset for now to be
-            // safe and clear.
             roof_points.push_back(ImVec2(p.x, p.y - height_px));
           }
 
           // Culling & LOD Logic
-          // Calculate screen-space bounding box
-          float min_x = screen_points[0].x, max_x = screen_points[0].x;
-          float min_y = screen_points[0].y, max_y = screen_points[0].y;
-          for (const auto &p : screen_points)
-          {
-            min_x = std::min(min_x, p.x);
-            max_x = std::max(max_x, p.x);
-            min_y = std::min(min_y, p.y);
-            max_y = std::max(max_y, p.y);
-          }
-
-          // Add roof height to bbox
-          if (!roof_points.empty())
-          {
-            for (const auto &p : roof_points)
-            {
-              min_y = std::min(min_y, p.y); // Roof is above (lower Y)
-            }
-          }
-
           float width = max_x - min_x;
           float height = max_y - min_y;
 
@@ -715,23 +783,17 @@ auto map_widget_t::draw(std::vector<sensor_t> &sensors, std::set<int> &selected_
           // LOD: Skip tiny buildings
           if (width < 3.0f || height < 3.0f)
           {
-            // Too small to matter
             continue;
           }
 
           // LOD: Simplified drawing for small buildings
           if (width < 10.0f)
           {
-            // Draw simple rect
-            draw_list->AddRectFilled(ImVec2(min_x, min_y), ImVec2(max_x, max_y), IM_COL32(100, 100, 100, 150));
+            draw_list->AddRectFilled(ImVec2(min_x, min_y - height_px), ImVec2(max_x, max_y), IM_COL32(100, 100, 100, 150));
             continue;
           }
 
-          // Draw Roof
-          draw_list->AddConvexPolyFilled(roof_points.data(), roof_points.size(), IM_COL32(140, 140, 140, 200));
-          draw_list->AddPolyline(roof_points.data(), roof_points.size(), IM_COL32(220, 220, 220, 255), true, 1.0f);
-
-          // Draw Walls (connect base to roof)
+          // Draw Walls first (connect base to roof)
           for (int i = 0; i < static_cast<int>(screen_points.size()); ++i)
           {
             size_t next = (static_cast<size_t>(i) + 1) % screen_points.size();
@@ -742,8 +804,16 @@ auto map_widget_t::draw(std::vector<sensor_t> &sensors, std::set<int> &selected_
 
             // Draw quad
             ImVec2 quad[4] = {p1, p2, r2, r1};
-            draw_list->AddConvexPolyFilled(quad, 4, IM_COL32(80, 80, 80, 180));
+            draw_list->AddConvexPolyFilled(quad, 4, IM_COL32(60, 60, 60, 180));
+            draw_list->AddLine(p1, r1, IM_COL32(100, 100, 100, 150), 1.0f);
           }
+
+          // Draw Roof AFTER walls for correct layering effect
+          for (size_t i = 0; i + 2 < tri_indices.size(); i += 3)
+          {
+            draw_list->AddTriangleFilled(roof_points[static_cast<size_t>(tri_indices[i])], roof_points[static_cast<size_t>(tri_indices[i + 1])], roof_points[static_cast<size_t>(tri_indices[i + 2])], fill_color);
+          }
+          draw_list->AddPolyline(roof_points.data(), roof_points.size(), outline_color, true, 1.5f);
         }
       }
     }
@@ -2531,7 +2601,7 @@ auto map_widget_t::draw_path_profile_window(elevation_service_t &elevation_servi
       if (samples > 1)
       {
         int idx = static_cast<int>((d_hover / dist_m) * (samples - 1));
-        if (idx >= 0 && idx < profile.size())
+        if (idx >= 0 && static_cast<size_t>(idx) < profile.size())
           h_terrain = profile[idx].second;
       }
 

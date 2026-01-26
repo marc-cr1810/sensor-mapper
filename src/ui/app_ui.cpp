@@ -202,7 +202,6 @@ void AppUI::render(map_widget_t &map, std::vector<sensor_t> &sensors, std::set<i
       ImGui::Text("Cursor: %.5f, %.5f", map.get_mouse_lat(), map.get_mouse_lon());
       ImGui::Separator();
 
-      // Re-calculate cursor altitude for status bar manually or use cached
       // For now, assume map stores it or we assume 0 not available here unless map exposed it.
       // map_widget_t doesn't expose m_cursor_alt publically but we can access it via a getter if we added one?
       // Wait, we didn't add a getter for m_cursor_alt in map_widget.hpp properly, only used locally.
@@ -397,7 +396,7 @@ void AppUI::render_sensor_config(std::vector<sensor_t> &sensors, std::set<int> &
         for (auto it = selected_indices.rbegin(); it != selected_indices.rend(); ++it)
         {
           int idx = *it;
-          if (idx >= 0 && idx < sensors.size())
+          if (idx >= 0 && static_cast<size_t>(idx) < sensors.size())
           {
             sensors.erase(sensors.begin() + idx);
           }
@@ -612,7 +611,6 @@ void AppUI::render_sensor_config(std::vector<sensor_t> &sensors, std::set<int> &
     // But sensor_t doesn't have Tx Power exposed in UI yet? No, it doesn't. Just Range.
     // Let's create a proxy Sensor representing the "Shared" state? Or just apply changes blindly.
 
-    static double shared_range = 1000.0;
     static bool range_init = false;
     if (!range_init)
     {
@@ -730,7 +728,7 @@ void AppUI::render_elevation_data(elevation_service_t &elevation_service, map_wi
   }
 }
 
-void AppUI::render_tdoa_analysis(map_widget_t &map, const std::vector<sensor_t> &sensors)
+void AppUI::render_tdoa_analysis(map_widget_t &map, const std::vector<sensor_t> & /*sensors*/)
 {
   bool tdoa_enabled = map.get_show_tdoa_analysis();
   if (ImGui::Checkbox("Enable TDOA Visualization", &tdoa_enabled))
@@ -903,167 +901,201 @@ void AppUI::render_map_view_controls(map_widget_t &map)
 
   ImGui::PopStyleVar(2);
   ImGui::Separator();
-  ImGui::Separator();
 }
 
 void AppUI::render_auto_placement(map_widget_t &map)
 {
-  if (!ImGui::Begin("Auto Sensor Placement", &m_show_auto_placement))
+  ImGui::SetNextWindowSize(ImVec2(420, 650), ImGuiCond_FirstUseEver);
+  if (!ImGui::Begin("Auto Sensor Placement", &m_show_auto_placement, ImGuiWindowFlags_NoScrollbar))
   {
     ImGui::End();
     return;
   }
 
-  ImGui::Text("Define a target area and automatically place sensors\nfor optimal coverage (minimized GDOP).");
+  ImGui::TextWrapped("Automatically place sensors for optimal coverage and geolocation accuracy (minimized GDOP).");
+  ImGui::Spacing();
   ImGui::Separator();
+  ImGui::Spacing();
 
-  ImGui::TextDisabled("CONSTRAINTS");
+  // --- SECTION 1: CONSTRAINTS ---
+  ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "1. PLACEMENT CONSTRAINTS");
+  ImGui::Spacing();
+
   ImGui::Checkbox("Use Buildings (Rooftops)", &m_opt_use_buildings);
   if (ImGui::IsItemHovered())
-    ImGui::SetTooltip("Prioritize placing sensors on top of known buildings for LOS.");
+    ImGui::SetTooltip("Prioritize placing sensors on top of known buildings for better line-of-sight.");
 
-  ImGui::Checkbox("Use Terrain (Landforms)", &m_opt_use_terrain);
+  ImGui::SameLine(ImGui::GetWindowWidth() * 0.55f);
+  ImGui::Checkbox("Use Terrain Peaks", &m_opt_use_terrain);
   if (ImGui::IsItemHovered())
     ImGui::SetTooltip("Prioritize placing sensors on local terrain peaks.");
 
-  ImGui::SliderInt("Sensor Count", &m_opt_sensor_count, 3, 10);
+  ImGui::Spacing();
+  ImGui::Text("Target Sensor Count:");
+  ImGui::SetNextItemWidth(-1);
+  ImGui::SliderInt("##sensorcount", &m_opt_sensor_count, 3, 10, "%d Sensors");
 
+  ImGui::Spacing();
   ImGui::Separator();
-  ImGui::TextDisabled("BUILDING SELECTION");
+  ImGui::Spacing();
 
-  // Selection Mode Toggle
+  // --- SECTION 2: SITE SELECTION ---
+  ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "2. BUILDING SELECTION");
+  ImGui::Spacing();
+  ImGui::TextWrapped("Tag individual buildings on the map to influence the placement algorithm:");
+  ImGui::Spacing();
+
   int sel_mode = static_cast<int>(map.get_selection_mode());
   bool changed = false;
+
+  ImGui::SetCursorPosX(ImGui::GetCursorPosX() + 10.0f);
   if (ImGui::RadioButton("None", &sel_mode, 0))
     changed = true;
-  ImGui::SameLine();
-  if (ImGui::RadioButton("Priority (Green)", &sel_mode, 1))
+  ImGui::SameLine(120);
+  ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.4f, 1.0f, 0.4f, 1.0f));
+  if (ImGui::RadioButton("Priority", &sel_mode, 1))
     changed = true;
-  ImGui::SameLine();
-  if (ImGui::RadioButton("Exclude (Red)", &sel_mode, 2))
+  ImGui::PopStyleColor();
+  ImGui::SameLine(240);
+  ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.0f, 0.4f, 0.4f, 1.0f));
+  if (ImGui::RadioButton("Exclude", &sel_mode, 2))
     changed = true;
+  ImGui::PopStyleColor();
 
   if (changed)
     map.set_selection_mode(static_cast<map_widget_t::SelectionMode>(sel_mode));
 
-  // Restriction Checkbox
+  ImGui::Spacing();
   bool restrict = map.get_restrict_to_priority();
-  if (ImGui::Checkbox("Restrict to Priority Only", &restrict))
-  {
+  if (ImGui::Checkbox("Only place sensors on 'Priority' buildings", &restrict))
     map.set_restrict_to_priority(restrict);
-  }
-  if (ImGui::IsItemHovered())
-    ImGui::SetTooltip("If checked, sensors will ONLY be placed on buildings in the Priority list.");
 
-  // Counts & Clear
+  ImGui::Spacing();
   auto &p_set = map.get_priority_buildings();
   auto &e_set = map.get_excluded_buildings();
-  ImGui::Text("Selected: %zu Priority, %zu Excluded", p_set.size(), e_set.size());
 
-  if (ImGui::Button("Clear Selection", ImVec2(-1, 0)))
-  {
+  ImGui::Text("Selection Status:");
+  ImGui::SameLine();
+  ImGui::TextColored(ImVec4(0.4f, 1.0f, 0.4f, 1.0f), "%zu Priority", p_set.size());
+  ImGui::SameLine();
+  ImGui::Text("|");
+  ImGui::SameLine();
+  ImGui::TextColored(ImVec4(1.0f, 0.4f, 0.4f, 1.0f), "%zu Excluded", e_set.size());
+
+  if (ImGui::Button("Clear Selection Tags", ImVec2(-1, 26)))
     map.clear_building_selection();
-  }
 
+  ImGui::Spacing();
   ImGui::Separator();
-  ImGui::TextDisabled("ACTIONS");
+  ImGui::Spacing();
 
-  // Strategy Selector
-  static int strategy_idx = 0; // 0=Geometric, 1=Advanced
-  const char *strategies[] = {"Geometric (Fast)", "Advanced (GDOP + LOS)"};
-  ImGui::Combo("Strategy", &strategy_idx, strategies, IM_ARRAYSIZE(strategies));
-  if (strategy_idx == 1)
-  {
-    ImGui::TextColored(ImVec4(1, 1, 0, 1), "Note: Advanced mode is slower.");
-  }
+  // --- SECTION 3: EXECUTION ---
+  ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "3. OPTIMIZATION");
+  ImGui::Spacing();
 
-  // Detect Polygon Completion (Falling Edge of is_drawing)
+  static int strategy_idx = 0;
+  const char *strategies[] = {"Geometric (Fastest)", "Advanced (Best Coverage + LOS)"};
+  ImGui::Text("Optimization Strategy:");
+  ImGui::SetNextItemWidth(-1);
+  ImGui::Combo("##strategy", &strategy_idx, strategies, IM_ARRAYSIZE(strategies));
+  if (ImGui::IsItemHovered())
+    ImGui::SetTooltip("Geometric: Even spatial distribution.\nAdvanced: Iterative optimization considering obstacles and geometry.");
+
+  ImGui::Spacing();
+
+  // Polygon Drawing Logic
   static bool was_drawing = false;
   bool is_drawing = map.is_drawing_polygon();
-
   if (was_drawing && !is_drawing)
   {
-    // Polygon just finished (either via button or map click)
-    // Auto-fetch buildings if enabled
-    if (m_opt_use_buildings)
+    const auto &poly = map.get_target_polygon();
+    if (!poly.empty())
     {
-      const auto &poly = map.get_target_polygon();
-      if (!poly.empty())
+      double min_lat = 90.0, max_lat = -90.0, min_lon = 180.0, max_lon = -180.0;
+      for (const auto &p : poly)
       {
-        double min_lat = 90.0, max_lat = -90.0, min_lon = 180.0, max_lon = -180.0;
-        for (const auto &p : poly)
-        {
-          min_lat = std::min(min_lat, p.first);
-          max_lat = std::max(max_lat, p.first);
-          min_lon = std::min(min_lon, p.second);
-          max_lon = std::max(max_lon, p.second);
-        }
-        // Only fetch if we suspect we don't have them? Or just always fetch to be safe/update?
-        // Always fetch ensures we get the latest data for the area.
-        map.fetch_buildings_in_area(min_lat, max_lat, min_lon, max_lon);
-        m_waiting_for_buildings = true;
+        min_lat = std::min(min_lat, p.first);
+        max_lat = std::max(max_lat, p.first);
+        min_lon = std::min(min_lon, p.second);
+        max_lon = std::max(max_lon, p.second);
       }
+      map.fetch_buildings_in_area(min_lat, max_lat, min_lon, max_lon);
+      m_waiting_for_buildings = true;
     }
   }
   was_drawing = is_drawing;
 
   if (map.is_drawing_polygon())
   {
-    if (ImGui::Button("Finish Drawing", ImVec2(-1, 30)))
-    {
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.2f, 0.45f, 0.85f, 1.0f));
+    if (ImGui::Button("FINISH DRAWING TARGET AREA", ImVec2(-1, 45)))
       map.finish_polygon();
-    }
+    ImGui::PopStyleColor();
   }
   else
   {
-    if (ImGui::Button("Draw Target Area", ImVec2(-1, 30)))
-    {
+    if (ImGui::Button("DRAW TARGET AREA ON MAP", ImVec2(-1, 45)))
       map.start_listing_polygon();
-    }
   }
 
-  // Disable if not ready (polyon empty) OR no mode selected
+  ImGui::Spacing();
+
   const auto &polygon = map.get_target_polygon();
-  bool ready = !polygon.empty() && !map.is_drawing_polygon();
-  if (!m_opt_use_buildings && !m_opt_use_terrain)
-  {
-    ready = false;
-    ImGui::TextColored(ImVec4(1, 0.4, 0.4, 1), "Select at least one placement mode.");
-  }
-
-  if (!ready)
-    ImGui::BeginDisabled();
+  bool ready = !polygon.empty() && !map.is_drawing_polygon() && (m_opt_use_buildings || m_opt_use_terrain);
 
   if (m_optimizer->is_running())
   {
-    ImGui::Text("Optimizing...");
-    ImGui::ProgressBar(m_optimizer->get_progress(), ImVec2(-1, 0), m_optimizer->get_status().c_str());
-    if (ImGui::Button("Cancel", ImVec2(-1, 20)))
-    {
+    ImGui::Text("Status: Optimizing...");
+    ImGui::ProgressBar(m_optimizer->get_progress(), ImVec2(-1, 28), m_optimizer->get_status().c_str());
+    if (ImGui::Button("Cancel Optimization", ImVec2(-1, 26)))
       m_optimizer->cancel();
+  }
+  else if (m_waiting_for_buildings)
+  {
+    auto status = map.get_building_loading_status();
+    ImGui::Text("Loading data: %d active, %d queued", status.first, status.second);
+    ImGui::ProgressBar(-1.0f * (float)ImGui::GetTime(), ImVec2(-1, 28), "Fetching Building Tiles...");
+
+    // Auto-start logic
+    double min_lat = 90.0, max_lat = -90.0, min_lon = 180.0, max_lon = -180.0;
+    for (const auto &p : polygon)
+    {
+      min_lat = std::min(min_lat, p.first);
+      max_lat = std::max(max_lat, p.first);
+      min_lon = std::min(min_lon, p.second);
+      max_lon = std::max(max_lon, p.second);
+    }
+    if (!m_opt_use_buildings || map.has_buildings_for_area(min_lat, max_lat, min_lon, max_lon) || (status.first == 0 && status.second == 0))
+    {
+      m_waiting_for_buildings = false;
+      if (m_opt_start_pending)
+      {
+        m_opt_start_pending = false;
+        optimizer_config_t config;
+        config.use_buildings = m_opt_use_buildings;
+        config.use_terrain = m_opt_use_terrain;
+        config.sensor_count = m_opt_sensor_count;
+        config.strategy = static_cast<OptimizationStrategy>(strategy_idx);
+        auto building_ptrs = map.get_buildings_in_area(min_lat, max_lat, min_lon, max_lon);
+        for (auto b_ptr : building_ptrs)
+          if (b_ptr)
+            config.buildings.push_back(*b_ptr);
+        auto &p_set_ref = map.get_priority_buildings();
+        config.priority_building_ids.assign(p_set_ref.begin(), p_set_ref.end());
+        auto &e_set_ref = map.get_excluded_buildings();
+        config.excluded_building_ids.assign(e_set_ref.begin(), e_set_ref.end());
+        config.restrict_to_priority = map.get_restrict_to_priority();
+        m_optimizer->start(polygon, config);
+      }
     }
   }
   else
   {
-    if (m_waiting_for_buildings)
+    if (!ready)
+      ImGui::BeginDisabled();
+    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.15f, 0.65f, 0.25f, 1.0f));
+    if (ImGui::Button("RUN OPTIMIZER", ImVec2(-1, 55)))
     {
-      auto status = map.get_building_loading_status();
-      int active = status.first;
-      int queued = status.second;
-
-      if (active > 0 || queued > 0)
-      {
-        ImGui::Text("Loading building data... (%d active, %d queued)", active, queued);
-        // Show indeterminate if starting, or just pulsing
-        ImGui::ProgressBar(-1.0f * (float)ImGui::GetTime(), ImVec2(-1, 0), "Fetching tiles...");
-      }
-      else
-      {
-        ImGui::Text("Verifying data availability...");
-        ImGui::ProgressBar(1.0f, ImVec2(-1, 0), "Checking...");
-      }
-
-      // Check if loaded
       double min_lat = 90.0, max_lat = -90.0, min_lon = 180.0, max_lon = -180.0;
       for (const auto &p : polygon)
       {
@@ -1072,110 +1104,40 @@ void AppUI::render_auto_placement(map_widget_t &map)
         min_lon = std::min(min_lon, p.second);
         max_lon = std::max(max_lon, p.second);
       }
-
-      // If we don't need buildings, or they are loaded, OR if we are done loading (queue empty)
-      if (!m_opt_use_buildings || map.has_buildings_for_area(min_lat, max_lat, min_lon, max_lon) || (active == 0 && queued == 0))
+      if (m_opt_use_buildings && !map.has_buildings_for_area(min_lat, max_lat, min_lon, max_lon))
       {
-        m_waiting_for_buildings = false;
-
-        if (m_opt_start_pending)
-        {
-          m_opt_start_pending = false;
-          // Start Optimizer
-          optimizer_config_t config;
-          config.use_buildings = m_opt_use_buildings;
-          config.use_terrain = m_opt_use_terrain;
-          config.sensor_count = m_opt_sensor_count;
-          config.strategy = static_cast<OptimizationStrategy>(strategy_idx);
-
-          // Copy buildings in area for the background thread
-          auto building_ptrs = map.get_buildings_in_area(min_lat, max_lat, min_lon, max_lon);
-          for (auto b_ptr : building_ptrs)
-          {
-            if (b_ptr)
-              config.buildings.push_back(*b_ptr);
-          }
-
-          // Pass Selection Lists
-          auto &p_set = map.get_priority_buildings();
-          config.priority_building_ids.assign(p_set.begin(), p_set.end());
-          auto &e_set = map.get_excluded_buildings();
-          config.excluded_building_ids.assign(e_set.begin(), e_set.end());
-          config.restrict_to_priority = map.get_restrict_to_priority();
-
-          m_optimizer->start(polygon, config);
-        }
+        map.fetch_buildings_in_area(min_lat, max_lat, min_lon, max_lon);
+        m_waiting_for_buildings = true;
+        m_opt_start_pending = true;
       }
-
-      if (ImGui::Button("Cancel", ImVec2(-1, 20)))
+      else
       {
-        m_waiting_for_buildings = false;
-        m_opt_start_pending = false;
+        optimizer_config_t config;
+        config.use_buildings = m_opt_use_buildings;
+        config.use_terrain = m_opt_use_terrain;
+        config.sensor_count = m_opt_sensor_count;
+        config.strategy = static_cast<OptimizationStrategy>(strategy_idx);
+        auto building_ptrs = map.get_buildings_in_area(min_lat, max_lat, min_lon, max_lon);
+        for (auto b_ptr : building_ptrs)
+          if (b_ptr)
+            config.buildings.push_back(*b_ptr);
+        auto &p_set_ref = map.get_priority_buildings();
+        config.priority_building_ids.assign(p_set_ref.begin(), p_set_ref.end());
+        auto &e_set_ref = map.get_excluded_buildings();
+        config.excluded_building_ids.assign(e_set_ref.begin(), e_set_ref.end());
+        config.restrict_to_priority = map.get_restrict_to_priority();
+        m_optimizer->start(polygon, config);
       }
     }
-    // Note: We use 'else if' or just 'else' here?
-    // If waiting finished this frame, we fall through to button.
+    ImGui::PopStyleColor();
+    if (!ready)
+      ImGui::EndDisabled();
 
-    if (!m_waiting_for_buildings)
+    if (!polygon.empty())
     {
-      if (ImGui::Button("Optimize Placement", ImVec2(-1, 40)))
-      {
-        double min_lat = 90.0, max_lat = -90.0, min_lon = 180.0, max_lon = -180.0;
-        for (const auto &p : polygon)
-        {
-          min_lat = std::min(min_lat, p.first);
-          max_lat = std::max(max_lat, p.first);
-          min_lon = std::min(min_lon, p.second);
-          max_lon = std::max(max_lon, p.second);
-        }
-
-        // Final check: do we need a fetch?
-        if (m_opt_use_buildings && !map.has_buildings_for_area(min_lat, max_lat, min_lon, max_lon))
-        {
-          map.fetch_buildings_in_area(min_lat, max_lat, min_lon, max_lon);
-          m_waiting_for_buildings = true;
-          m_opt_start_pending = true; // Auto start when done
-        }
-        else
-        {
-          // Start Optimizer immediately
-          optimizer_config_t config;
-          config.use_buildings = m_opt_use_buildings;
-          config.use_terrain = m_opt_use_terrain;
-          config.sensor_count = m_opt_sensor_count;
-          config.strategy = static_cast<OptimizationStrategy>(strategy_idx);
-
-          // Copy buildings in area for the background thread
-          auto building_ptrs = map.get_buildings_in_area(min_lat, max_lat, min_lon, max_lon);
-          for (auto b_ptr : building_ptrs)
-          {
-            if (b_ptr)
-              config.buildings.push_back(*b_ptr);
-          }
-
-          // Pass Selection Lists
-          auto &p_set = map.get_priority_buildings();
-          config.priority_building_ids.assign(p_set.begin(), p_set.end());
-
-          auto &e_set = map.get_excluded_buildings();
-          config.excluded_building_ids.assign(e_set.begin(), e_set.end());
-
-          config.restrict_to_priority = map.get_restrict_to_priority();
-
-          m_optimizer->start(polygon, config);
-        }
-      }
-    }
-  }
-
-  if (!ready && !m_optimizer->is_running())
-    ImGui::EndDisabled();
-
-  if (!polygon.empty() && !map.is_drawing_polygon() && !m_optimizer->is_running())
-  {
-    if (ImGui::Button("Clear Area", ImVec2(-1, 20)))
-    {
-      map.clear_polygon();
+      ImGui::Spacing();
+      if (ImGui::Button("Clear Target Area", ImVec2(-1, 26)))
+        map.clear_polygon();
     }
   }
 
