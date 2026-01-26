@@ -1,5 +1,6 @@
 #include "simulation_engine.hpp"
 #include "geo_math.hpp"
+#include "tdoa_solver.hpp"
 #include <cmath>
 #include <algorithm>
 #include <limits>
@@ -22,6 +23,9 @@ std::vector<SimulationResult> SimulationEngine::run_simulation(const std::vector
   auto interpolated_points = interpolate_path(path, step_size_m);
 
   results.reserve(interpolated_points.size());
+
+  // TDOA Solver
+  tdoa_solver_t tdoa_solver;
 
   // 2. Simulate each point
   for (const auto &point : interpolated_points)
@@ -171,6 +175,21 @@ std::vector<SimulationResult> SimulationEngine::run_simulation(const std::vector
         // We track `max_signal_dbm`. If we find a better signal, we update `best_sensor_idx` and `los_blocked` status for THAT sensor.
         // Yes, the code logic does that (assigning inside the if block).
       }
+    }
+
+    // 2. TDOA Error Calculation
+    // Estimate error and GDOP using all available sensors
+    try
+    {
+      res.gdop = tdoa_solver.calculate_gdop(sensors, lat, lon, drone_amsl);
+      // Estimate error (assuming 10ns jitter as default or configured elsewhere)
+      // Note: estimate_positioning_error uses all sensors
+      res.position_error_m = tdoa_solver.estimate_positioning_error(sensors, lat, lon, drone_amsl, 10.0);
+    }
+    catch (...)
+    {
+      res.gdop = 99.9;
+      res.position_error_m = 999.9;
     }
 
     results.push_back(res);

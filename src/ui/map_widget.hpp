@@ -264,12 +264,15 @@ public:
   struct drone_path_result_visual_t
   {
     double lat, lon;
-    double signal_dbm;
-    bool los_blocked;
+    double value;     // Signal (dBm) or Accuracy (m)
+    bool los_blocked; // Only used for Signal mode
   };
-  auto set_drone_path_results(const std::vector<drone_path_result_visual_t> &results) -> void
+
+  // 0 = Signal, 1 = Accuracy
+  auto set_drone_path_results(const std::vector<drone_path_result_visual_t> &results, int metric_mode = 0) -> void
   {
     m_drone_path_results = results;
+    m_path_metric_mode = metric_mode;
   }
   auto get_drone_path_results() const -> const std::vector<drone_path_result_visual_t> &
   {
@@ -508,6 +511,7 @@ private:
 
   std::vector<std::pair<double, double>> m_drone_path;
   std::vector<drone_path_result_visual_t> m_drone_path_results;
+  int m_path_metric_mode = 0; // 0 = Signal, 1 = Accuracy
   int m_highlight_path_index = -1;
 };
 

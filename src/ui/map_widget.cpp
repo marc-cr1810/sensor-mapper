@@ -987,17 +987,31 @@ auto map_widget_t::draw(std::vector<sensor_t> &sensors, std::set<int> &selected_
   if (!m_drone_path_results.empty())
   {
     // Signal > -70 (Green), -70 to -90 (Yellow/Orange), < -90 (Red)
-    auto get_col = [](double dbm, bool blocked) -> ImU32
+    // Color function depends on mode
+    auto get_col = [&](double val, bool blocked) -> ImU32
     {
-      if (blocked)
-        return IM_COL32(100, 100, 100, 200); // Grey if blocked (although simulation logic sets low dbm)
-      if (dbm > -70)
-        return IM_COL32(0, 255, 0, 255);
-      if (dbm > -85)
-        return IM_COL32(255, 255, 0, 255);
-      if (dbm > -95)
-        return IM_COL32(255, 128, 0, 255);
-      return IM_COL32(255, 0, 0, 255);
+      if (m_path_metric_mode == 0) // Signal Strength
+      {
+        if (blocked)
+          return IM_COL32(100, 100, 100, 200);
+        if (val > -70)
+          return IM_COL32(0, 255, 0, 255);
+        if (val > -85)
+          return IM_COL32(255, 255, 0, 255);
+        if (val > -95)
+          return IM_COL32(255, 128, 0, 255);
+        return IM_COL32(255, 0, 0, 255);
+      }
+      else // Position Accuracy (Error in meters)
+      {
+        if (val < 5.0)
+          return IM_COL32(0, 255, 0, 255); // < 5m Excellent
+        if (val < 15.0)
+          return IM_COL32(255, 255, 0, 255); // < 15m Good
+        if (val < 50.0)
+          return IM_COL32(255, 128, 0, 255); // < 50m Fair
+        return IM_COL32(255, 0, 0, 255);     // > 50m Poor
+      }
     };
 
     for (size_t i = 0; i < m_drone_path_results.size() - 1; ++i)
@@ -1006,7 +1020,7 @@ auto map_widget_t::draw(std::vector<sensor_t> &sensors, std::set<int> &selected_
       const auto &res2 = m_drone_path_results[i + 1];
       ImVec2 p1 = lat_lon_to_screen(res1.lat, res1.lon, canvas_p0, canvas_sz);
       ImVec2 p2 = lat_lon_to_screen(res2.lat, res2.lon, canvas_p0, canvas_sz);
-      ImU32 c1 = get_col(res1.signal_dbm, res1.los_blocked);
+      ImU32 c1 = get_col(res1.value, res1.los_blocked);
       draw_list->AddLine(p1, p2, c1, 3.0f);
     }
   }

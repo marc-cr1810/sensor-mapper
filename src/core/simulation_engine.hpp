@@ -19,6 +19,9 @@ struct SimulationResult
   double max_signal_dbm;
   int best_sensor_idx; // -1 if no signal
   bool los_blocked;
+  // TDOA Metrics
+  double gdop;
+  double position_error_m;
 };
 
 class SimulationEngine

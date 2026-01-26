@@ -27,6 +27,13 @@ bool SimulationUI::render(bool &is_open, map_widget_t &map, const std::vector<se
     ImGui::DragFloat("Freq (MHz)", &m_frequency_mhz, 1.0f, 100.0f, 6000.0f);
 
     ImGui::Spacing();
+    ImGui::Text("Visualization Mode:");
+    if (ImGui::RadioButton("Signal Strength", m_metric_mode == MetricMode::SignalStrength))
+      m_metric_mode = MetricMode::SignalStrength;
+    if (ImGui::RadioButton("Position Accuracy", m_metric_mode == MetricMode::PositionAccuracy))
+      m_metric_mode = MetricMode::PositionAccuracy;
+
+    ImGui::Spacing();
     ImGui::Separator();
     ImGui::Spacing();
 
@@ -75,15 +82,6 @@ bool SimulationUI::render(bool &is_open, map_widget_t &map, const std::vector<se
         m_last_results = m_sim_engine->run_simulation(path, sensors, elevation_service, building_service, static_cast<double>(m_step_size_m), static_cast<double>(m_drone_tx_power_dbm), static_cast<double>(m_drone_alt_m),
                                                       static_cast<double>(m_frequency_mhz));
         m_has_results = true;
-
-        // Push visual results to map
-        std::vector<map_widget_t::drone_path_result_visual_t> visual_res;
-        visual_res.reserve(m_last_results.size());
-        for (const auto &r : m_last_results)
-        {
-          visual_res.push_back({r.interpolated_lat, r.interpolated_lon, r.max_signal_dbm, r.los_blocked});
-        }
-        map.set_drone_path_results(visual_res);
       }
     }
     else if (sensors.empty())
@@ -93,6 +91,21 @@ bool SimulationUI::render(bool &is_open, map_widget_t &map, const std::vector<se
     else if (path.empty())
     {
       ImGui::TextDisabled("Draw a path to run.");
+    }
+
+    // Push visual results to map (every frame or when changed?)
+    // Originally it was only on RUN. But if we switch modes, we need to push again.
+    // Let's push every frame or check if dirty. For Immediate GUI, doing it here is fine if array isn't massive.
+    if (m_has_results)
+    {
+      std::vector<map_widget_t::drone_path_result_visual_t> visual_res;
+      visual_res.reserve(m_last_results.size());
+      for (const auto &r : m_last_results)
+      {
+        double val = (m_metric_mode == MetricMode::SignalStrength) ? r.max_signal_dbm : r.position_error_m;
+        visual_res.push_back({r.interpolated_lat, r.interpolated_lon, val, r.los_blocked});
+      }
+      map.set_drone_path_results(visual_res, (m_metric_mode == MetricMode::SignalStrength) ? 0 : 1);
     }
 
     // Results Graph
@@ -110,37 +123,51 @@ void SimulationUI::render_results_graph(map_widget_t &map)
 {
   ImGui::Spacing();
   ImGui::Separator();
-  ImGui::Text("Connectivity Profile");
+  if (m_metric_mode == MetricMode::SignalStrength)
+    ImGui::Text("Connectivity Profile");
+  else
+    ImGui::Text("TDOA Accuracy Profile");
 
   if (m_last_results.empty())
     return;
 
   // Prepare data for PlotLines
-  // We want Signal vs Distance
-  std::vector<float> signal_data;
-  signal_data.reserve(m_last_results.size());
+  std::vector<float> data;
+  data.reserve(m_last_results.size());
 
-  float min_s = 0.0f;
-  float max_s = -200.0f;
+  float min_v = 1e9f;
+  float max_v = -1e9f;
 
   for (const auto &r : m_last_results)
   {
-    float s = static_cast<float>(r.max_signal_dbm);
-    signal_data.push_back(s);
-    if (s < min_s)
-      min_s = s;
-    if (s > max_s)
-      max_s = s;
+    float val = (m_metric_mode == MetricMode::SignalStrength) ? static_cast<float>(r.max_signal_dbm) : static_cast<float>(r.position_error_m);
+    data.push_back(val);
+    if (val < min_v)
+      min_v = val;
+    if (val > max_v)
+      max_v = val;
   }
 
   // Bounds
-  if (min_s > -60.0f)
-    min_s = -60.0f;
-  if (min_s < -120.0f)
-    min_s = -120.0f;
-  max_s = 0.0f; // Cap at 0 usually
+  if (m_metric_mode == MetricMode::SignalStrength)
+  {
+    if (min_v > -60.0f)
+      min_v = -60.0f;
+    if (min_v < -120.0f)
+      min_v = -120.0f;
+    max_v = 0.0f;
+  }
+  else
+  {
+    if (min_v < 0.0f)
+      min_v = 0.0f;
+    if (max_v < 10.0f)
+      max_v = 10.0f; // Minimal scale
+    if (max_v > 200.0f)
+      max_v = 200.0f; // Cap visualization
+  }
 
-  ImGui::PlotLines("##signalgraph", signal_data.data(), static_cast<int>(signal_data.size()), 0, "Signal (dBm)", -120.0f, 10.0f, ImVec2(-1, 150));
+  ImGui::PlotLines("##results_graph", data.data(), static_cast<int>(data.size()), 0, (m_metric_mode == MetricMode::SignalStrength) ? "Signal (dBm)" : "Error (m)", min_v, max_v, ImVec2(-1, 150));
 
   // Hover Logic
   int hover_idx = -1;
@@ -150,9 +177,9 @@ void SimulationUI::render_results_graph(map_widget_t &map)
     float graph_x = ImGui::GetItemRectMin().x;
     float graph_w = ImGui::GetItemRectSize().x;
     float t = (mouse_x - graph_x) / graph_w;
-    int idx = static_cast<int>(t * (signal_data.size() - 1));
+    int idx = static_cast<int>(t * (data.size() - 1));
 
-    if (idx >= 0 && idx < static_cast<int>(signal_data.size()))
+    if (idx >= 0 && idx < static_cast<int>(data.size()))
     {
       hover_idx = idx;
     }
@@ -160,18 +187,28 @@ void SimulationUI::render_results_graph(map_widget_t &map)
   map.set_highlight_path_index(hover_idx);
 
   // Statistics
-  // % Connected (> -90 dBm)
-  int connected_count = 0;
-  for (float s : signal_data)
+  if (m_metric_mode == MetricMode::SignalStrength)
   {
-    if (s > -90.0f)
-      connected_count++;
+    int connected_count = 0;
+    for (float s : data)
+    {
+      if (s > -90.0f)
+        connected_count++;
+    }
+    float pct = 100.0f * (float)connected_count / (float)data.size();
+    ImGui::Text("Connected Area (> -90dBm): %.1f%%", pct);
   }
-  float pct = 100.0f * (float)connected_count / (float)signal_data.size();
+  else
+  {
+    float mean_err = 0.0f;
+    for (float v : data)
+      mean_err += v;
+    mean_err /= data.size();
+    ImGui::Text("Mean Error: %.1f m", mean_err);
+  }
 
-  ImGui::Text("Connected Area (> -90dBm): %.1f%%", pct);
-  ImGui::Text("Min Signal: %.1f dBm", min_s);
-  ImGui::Text("Max Signal: %.1f dBm", max_s);
+  ImGui::Text("Min: %.1f", min_v);
+  ImGui::Text("Max: %.1f", max_v);
 }
 
 } // namespace sensor_mapper

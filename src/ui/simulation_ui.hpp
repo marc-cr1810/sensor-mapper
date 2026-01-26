@@ -32,6 +32,13 @@ private:
   std::vector<SimulationResult> m_last_results;
   bool m_has_results = false;
 
+  enum class MetricMode
+  {
+    SignalStrength,
+    PositionAccuracy
+  };
+  MetricMode m_metric_mode = MetricMode::SignalStrength;
+
   // Graphing helpers
   void render_results_graph(map_widget_t &map);
 };
