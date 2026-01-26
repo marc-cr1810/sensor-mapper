@@ -92,6 +92,8 @@ void AppUI::render(map_widget_t &map, std::vector<sensor_t> &sensors, std::set<i
   // Dockspace
   ImGui::DockSpaceOverViewport(0, ImGui::GetMainViewport());
 
+  map.set_show_target_area(m_show_auto_placement);
+
   render_main_menu(sensors, selected_indices, map, elevation_service, on_exit);
 
   // Check if optimizer has results

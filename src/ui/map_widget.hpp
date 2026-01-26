@@ -221,6 +221,14 @@ public:
   {
     return m_is_drawing_polygon;
   }
+  auto set_show_target_area(bool show) -> void
+  {
+    m_show_target_area = show;
+  }
+  auto get_show_target_area() const -> bool
+  {
+    return m_show_target_area;
+  }
 
   auto get_timing_jitter_ns() const -> float
   {
@@ -424,6 +432,7 @@ private:
   std::optional<geo_point_t> m_profile_hover_pos;
 
   bool m_is_drawing_polygon = false;
+  bool m_show_target_area = true;
   std::vector<std::pair<double, double>> m_target_polygon;
 };
 

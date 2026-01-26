@@ -750,7 +750,7 @@ auto map_widget_t::draw(std::vector<sensor_t> &sensors, std::set<int> &selected_
   }
 
   // --- Draw Target Polygon ---
-  if (!m_target_polygon.empty())
+  if ((m_show_target_area || m_is_drawing_polygon) && !m_target_polygon.empty())
   {
     std::vector<ImVec2> points;
     for (const auto &p : m_target_polygon)
