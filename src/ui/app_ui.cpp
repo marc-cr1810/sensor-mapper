@@ -768,6 +768,10 @@ void AppUI::render_tdoa_analysis(map_widget_t &map, const std::vector<sensor_t> 
     if (ImGui::Checkbox("Show Accuracy", &show_accuracy))
       map.set_show_accuracy_heatmap(show_accuracy);
 
+    float jitter = map.get_timing_jitter_ns();
+    if (ImGui::DragFloat("Job Jitter (ns)", &jitter, 0.5f, 0.0f, 100.0f, "%.1f ns"))
+      map.set_timing_jitter_ns(jitter);
+
     ImGui::Spacing();
     ImGui::TextDisabled("TEST POINT");
 
