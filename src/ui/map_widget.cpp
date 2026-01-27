@@ -1380,8 +1380,29 @@ auto map_widget_t::draw(std::vector<sensor_t> &sensors, std::set<int> &selected_
   // Deselection: Click on background (and missed all sensors)
   if (!sensor_clicked && is_hovered && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
   {
-    // Don't deselect if holding modifier keys (maybe trying to marquee? not impl yet)
-    if (!ImGui::GetIO().KeyCtrl && !ImGui::GetIO().KeyShift)
+    if (ImGui::GetIO().KeyShift)
+    {
+      // Shift+Click: Place TDOA Test Point
+      ImVec2 mouse_pos_screen = io.MousePos;
+      ImVec2 mouse_offset_from_center = ImVec2(mouse_pos_screen.x - (canvas_p0.x + canvas_sz.x * 0.5f), mouse_pos_screen.y - (canvas_p0.y + canvas_sz.y * 0.5f));
+      double mouse_wx_click = center_wx + (mouse_offset_from_center.x / world_size_pixels);
+      double mouse_wy_click = center_wy + (mouse_offset_from_center.y / world_size_pixels);
+
+      // Wrap X
+      if (mouse_wx_click > 1.0)
+        mouse_wx_click -= 1.0;
+      if (mouse_wx_click < 0.0)
+        mouse_wx_click += 1.0;
+
+      if (mouse_wy_click > 0.0 && mouse_wy_click < 1.0)
+      {
+        double clat, clon;
+        geo::world_to_lat_lon(mouse_wx_click, mouse_wy_click, clat, clon);
+        set_tdoa_test_point(clat, clon);
+      }
+    }
+    // Don't deselect if holding modifier keys either
+    else if (!ImGui::GetIO().KeyCtrl)
     {
       selected_indices.clear();
     }
