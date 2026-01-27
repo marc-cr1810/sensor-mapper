@@ -255,6 +255,32 @@ public:
     m_highlight_path_index = idx;
   }
 
+  // Playback & Log Import
+  struct PlaybackState
+  {
+    bool is_playing = false;
+    bool loop = false;
+    float speed_multiplier = 1.0f; // 1.0 = Realtime (if time exists) or 10m/s
+
+    // We use a normalized progress (0.0 to 1.0) or index-based position?
+    // Since logs might vary in step size, time-based is best if time exists.
+    // If no time, we assume constant speed.
+    double current_time_sec = 0.0;
+    double duration_sec = 0.0;
+
+    // Or index based for simple path
+    double current_index = 0.0;
+  };
+
+  auto import_drone_path(const std::string &filepath) -> bool;
+
+  auto get_playback_state() -> PlaybackState &
+  {
+    return m_playback_state;
+  }
+  auto update_playback(double dt) -> void;
+  auto set_playback_pos(double t) -> void; // 0.0 to 1.0
+
   // Forward declare SimulationResult to avoid include leak?
   // Probably better to include simulation_engine.hpp or just use a simplified struct/void* if we want to minimize deps.
   // But for now, let's assume valid include or forward decl.
@@ -512,7 +538,11 @@ private:
   std::vector<std::pair<double, double>> m_drone_path;
   std::vector<drone_path_result_visual_t> m_drone_path_results;
   int m_path_metric_mode = 0; // 0 = Signal, 1 = Accuracy
+
   int m_highlight_path_index = -1;
+
+  PlaybackState m_playback_state;
+  std::vector<double> m_path_time_offsets; // Time in seconds for each point in m_drone_path
 };
 
 } // namespace sensor_mapper

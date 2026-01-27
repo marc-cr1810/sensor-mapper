@@ -41,6 +41,8 @@ private:
 
   // Graphing helpers
   void render_results_graph(map_widget_t &map);
+
+  char m_log_path_buf[1024] = "";
 };
 
 } // namespace sensor_mapper

@@ -14,6 +14,9 @@ bool SimulationUI::render(bool &is_open, map_widget_t &map, const std::vector<se
   if (!is_open)
     return false;
 
+  // Update playback
+  map.update_playback(ImGui::GetIO().DeltaTime);
+
   ImGui::SetNextWindowSize(ImVec2(400, 500), ImGuiCond_FirstUseEver);
   // Restore normal behavior: FirstUseEver allows user to move it.
   ImGui::SetNextWindowPos(ImVec2(100, 100), ImGuiCond_FirstUseEver);
@@ -58,6 +61,69 @@ bool SimulationUI::render(bool &is_open, map_widget_t &map, const std::vector<se
       {
         map.start_drone_path();
       }
+    }
+
+    // Flight Log Import
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::TextDisabled("IMPORT LOG");
+    ImGui::InputTextWithHint("##logpath", "Path to .gpx or .csv", m_log_path_buf, sizeof(m_log_path_buf));
+    if (ImGui::Button("Load Log File", ImVec2(-1, 0)))
+    {
+      if (map.import_drone_path(m_log_path_buf))
+      {
+        // Reset results
+        m_has_results = false;
+        m_last_results.clear();
+      }
+    }
+
+    ImGui::Spacing();
+    ImGui::Separator();
+
+    // Playback Control
+    if (!path.empty())
+    {
+      ImGui::Spacing();
+      ImGui::TextDisabled("PLAYBACK");
+
+      auto &playback = map.get_playback_state();
+
+      // Time Slider
+      float t = static_cast<float>(playback.current_time_sec);
+      if (ImGui::SliderFloat("Time", &t, 0.0f, static_cast<float>(playback.duration_sec), "%.1fs"))
+      {
+        map.set_playback_pos(t / playback.duration_sec);
+      }
+
+      // Controls
+      if (ImGui::Button(playback.is_playing ? "Pause" : "Play", ImVec2(80, 0)))
+      {
+        playback.is_playing = !playback.is_playing;
+      }
+      ImGui::SameLine();
+      if (ImGui::Button("Stop", ImVec2(60, 0)))
+      {
+        playback.is_playing = false;
+        playback.current_time_sec = 0.0;
+        map.set_playback_pos(0.0);
+      }
+      ImGui::SameLine();
+      ImGui::Checkbox("Loop", &playback.loop);
+
+      ImGui::Text("Speed:");
+      ImGui::SameLine();
+      if (ImGui::Button("1x"))
+        playback.speed_multiplier = 1.0f;
+      ImGui::SameLine();
+      if (ImGui::Button("2x"))
+        playback.speed_multiplier = 2.0f;
+      ImGui::SameLine();
+      if (ImGui::Button("5x"))
+        playback.speed_multiplier = 5.0f;
+      ImGui::SameLine();
+      if (ImGui::Button("10x"))
+        playback.speed_multiplier = 10.0f;
     }
 
     if (ImGui::Button("Clear Path"))

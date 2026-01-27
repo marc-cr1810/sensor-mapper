@@ -162,6 +162,8 @@ set(SOURCES_CORE
   src/core/lidar_source.hpp
   src/core/simulation_engine.cpp
   src/core/simulation_engine.hpp
+  src/core/log_parser.cpp
+  src/core/log_parser.hpp
 )
 
 set(SOURCES_RENDERER

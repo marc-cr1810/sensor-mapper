@@ -6,6 +6,7 @@
 #include "../core/sensor.hpp"
 #include "../core/tdoa_solver.hpp"
 #include "../core/tile_service.hpp"
+#include "../core/log_parser.hpp"
 #include "imgui.h"
 
 #include "imgui_impl_opengl3.h"
@@ -303,6 +304,29 @@ auto map_widget_t::draw(std::vector<sensor_t> &sensors, std::set<int> &selected_
   ImDrawList *draw_list = ImGui::GetWindowDrawList();
   draw_list->AddRectFilled(canvas_p0, ImVec2(canvas_p0.x + canvas_sz.x, canvas_p0.y + canvas_sz.y), IM_COL32(20, 20, 20, 255));
   draw_list->AddRect(canvas_p0, ImVec2(canvas_p0.x + canvas_sz.x, canvas_p0.y + canvas_sz.y), IM_COL32(255, 255, 255, 100));
+
+  // Render Drone Icon if playing or has path
+  // We use the TDOA test point as the "Drone" position if playback is active
+  if (m_playback_state.is_playing && m_playback_state.current_time_sec < m_playback_state.duration_sec)
+  {
+    // Convert current pos to screen
+    double drone_lat = m_test_point_lat; // Sync'd in update_playback
+    double drone_lon = m_test_point_lon; // Sync'd in update_playback
+
+    // Or calculate fresh if needed, but test point is fine.
+    // Actually let's use the exact interpolated pos if we want smoothness independent of test point update rate?
+    // update_playback runs every frame usually.
+
+    ImVec2 drone_pos = lat_lon_to_screen(drone_lat, drone_lon, canvas_p0, canvas_sz);
+
+    draw_list->AddCircleFilled(drone_pos, 10.0f, IM_COL32(255, 50, 50, 255));
+    draw_list->AddCircle(drone_pos, 12.0f, IM_COL32(255, 255, 255, 255), 0, 2.0f);
+
+    // Label
+    char buf[32];
+    snprintf(buf, sizeof(buf), "DRONE (%.1fs)", m_playback_state.current_time_sec);
+    draw_list->AddText(ImVec2(drone_pos.x + 15, drone_pos.y - 15), IM_COL32(255, 255, 255, 255), buf);
+  }
 
   // Handle Input
   ImGui::InvisibleButton("map_canvas", canvas_sz);
@@ -2611,4 +2635,155 @@ auto map_widget_t::render_compass(ImDrawList *draw_list, const ImVec2 &canvas_p0
   // N label
 }
 
+auto map_widget_t::import_drone_path(const std::string &filepath) -> bool
+{
+  std::vector<log_point_t> points;
+  if (filepath.ends_with(".gpx") || filepath.ends_with(".GPX"))
+  {
+    points = LogParser::parse_gpx(filepath);
+  }
+  else
+  {
+    points = LogParser::parse_csv(filepath);
+  }
+
+  if (points.empty())
+    return false;
+
+  m_drone_path.clear();
+  m_path_time_offsets.clear();
+
+  // Convert logs to path
+  for (const auto &p : points)
+  {
+    m_drone_path.push_back({p.lat, p.lon});
+    // For time, if not present, we can synthesize it based on distance + speed (e.g. 10m/s)
+    // For now, if log has time, use it.
+    if (p.has_time)
+      m_path_time_offsets.push_back(p.time_sec);
+  }
+
+  // Synthesize time if missing
+  if (m_path_time_offsets.empty() && !m_drone_path.empty())
+  {
+    double current_time = 0.0;
+    m_path_time_offsets.push_back(0.0);
+    for (size_t i = 1; i < m_drone_path.size(); ++i)
+    {
+      double d = geo::distance(m_drone_path[i - 1].first, m_drone_path[i - 1].second, m_drone_path[i].first, m_drone_path[i].second);
+      // Assume 10 m/s
+      current_time += d / 15.0; // 15 m/s (~54km/h) default
+      m_path_time_offsets.push_back(current_time);
+    }
+  }
+
+  m_playback_state.duration_sec = m_path_time_offsets.empty() ? 0.0 : m_path_time_offsets.back();
+  m_playback_state.current_time_sec = 0.0;
+  m_playback_state.is_playing = false;
+
+  // Center map on path start
+  if (!m_drone_path.empty())
+  {
+    set_center(m_drone_path[0].first, m_drone_path[0].second);
+  }
+
+  return true;
+}
+
+auto map_widget_t::update_playback(double dt) -> void
+{
+  if (!m_playback_state.is_playing || m_drone_path.empty())
+    return;
+
+  // Synthesize timing for manual paths if missing
+  if (m_path_time_offsets.empty() && !m_drone_path.empty())
+  {
+    m_path_time_offsets.clear();
+    m_path_time_offsets.push_back(0.0);
+    double current_time = 0.0;
+    for (size_t i = 1; i < m_drone_path.size(); ++i)
+    {
+      double d = geo::distance(m_drone_path[i - 1].first, m_drone_path[i - 1].second, m_drone_path[i].first, m_drone_path[i].second);
+      // Assume 15 m/s (~54km/h) default speed
+      current_time += d / 15.0;
+      m_path_time_offsets.push_back(current_time);
+    }
+    m_playback_state.duration_sec = current_time;
+    // If loop was closed (first == last), calculation is correct.
+  }
+
+  if (m_path_time_offsets.empty())
+    return;
+
+  m_playback_state.current_time_sec += dt * m_playback_state.speed_multiplier;
+
+  if (m_playback_state.current_time_sec >= m_playback_state.duration_sec)
+  {
+    if (m_playback_state.loop)
+    {
+      m_playback_state.current_time_sec = 0.0;
+    }
+    else
+    {
+      m_playback_state.current_time_sec = m_playback_state.duration_sec;
+      m_playback_state.is_playing = false;
+    }
+  }
+
+  set_playback_pos(m_playback_state.current_time_sec / m_playback_state.duration_sec);
+}
+
+auto map_widget_t::set_playback_pos(double t) -> void
+{
+  if (m_path_time_offsets.empty())
+    return;
+
+  double target_time = t * m_playback_state.duration_sec;
+  m_playback_state.current_time_sec = target_time;
+
+  // Find index in m_path_time_offsets
+  auto it = std::lower_bound(m_path_time_offsets.begin(), m_path_time_offsets.end(), target_time);
+  size_t idx_next = std::distance(m_path_time_offsets.begin(), it);
+
+  double lat = 0.0, lon = 0.0;
+
+  if (idx_next == 0)
+  {
+    lat = m_drone_path[0].first;
+    lon = m_drone_path[0].second;
+  }
+  else if (idx_next >= m_path_time_offsets.size())
+  {
+    lat = m_drone_path.back().first;
+    lon = m_drone_path.back().second;
+  }
+  else
+  {
+    // Interpolate
+    size_t idx_prev = idx_next - 1;
+    double t0 = m_path_time_offsets[idx_prev];
+    double t1 = m_path_time_offsets[idx_next];
+    if (t1 > t0)
+    {
+      double ratio = (target_time - t0) / (t1 - t0);
+      geo::interpolate(m_drone_path[idx_prev].first, m_drone_path[idx_prev].second, m_drone_path[idx_next].first, m_drone_path[idx_next].second, ratio, lat, lon);
+    }
+    else
+    {
+      lat = m_drone_path[idx_prev].first;
+      lon = m_drone_path[idx_prev].second;
+    }
+  }
+
+  // Update TDOA Test Point to match drone position
+  // This drives the TDOA visualization
+  set_tdoa_test_point(lat, lon);
+
+  // Also we can update signal indicators here if we had logic for it,
+  // but TDOA test point update will trigger needed recalculations if we hook it up.
+  // Although `set_tdoa_test_point` just sets member variables and runs solver.
+  // It doesn't update the UI bars automatically unless UI reads from it.
+
+  // For the plan purpose (Visualise TDOA Hyperbolas shifting), this is sufficient.
+}
 } // namespace sensor_mapper
