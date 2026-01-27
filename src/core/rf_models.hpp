@@ -77,6 +77,33 @@ inline double calculate_two_ray(double d_km, double f_mhz, double h_tx, double h
   }
 }
 
+// Knife-Edge Diffraction Loss (ITU-R P.526 approximation)
+// v: Fresnel-Kirchhoff diffraction parameter
+// v = h * sqrt( (2/lambda) * (1/d1 + 1/d2) )
+// where h is height of obstacle above LoS (negative if clear)
+// d1, d2 are distances to obstacle
+inline double calculate_knife_edge_loss(double v)
+{
+  if (v <= -0.7)
+  {
+    return 0.0;
+  }
+  else
+  {
+    // J(v) = 6.9 + 20log(sqrt(v^2 + 1) + v)
+    return 6.9 + 20.0 * std::log10(std::sqrt(v * v + 1.0) + v);
+  }
+}
+
+// Helper to calculate v from geometry
+inline double calculate_fresnel_parameter(double d1_m, double d2_m, double h_obs_m, double freq_mhz)
+{
+  double lambda = 299.792458 / freq_mhz;
+  // v = h * sqrt( (2 * (d1+d2)) / (lambda * d1 * d2) )
+  double total_d = d1_m + d2_m;
+  return h_obs_m * std::sqrt((2.0 * total_d) / (lambda * d1_m * d2_m));
+}
+
 // Unified Path Loss Calculation
 inline double calculate_path_loss(double d_km, double f_mhz, double h_tx, double h_rx, PropagationModel model)
 {

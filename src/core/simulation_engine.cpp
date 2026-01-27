@@ -70,119 +70,94 @@ std::vector<SimulationResult> SimulationEngine::run_simulation(const std::vector
         continue;
       }
 
-      // Line of Sight Check
-      bool is_los = true;
+      double max_v = -10.0; // Start with clear LoS (v < -0.7)
 
-      // Terrain LoS Check (using elevation service)
-      // Simple sampling check
-      int samples = static_cast<int>(dist_km * 20.0); // 1 sample every 50m
+      // Terrain LoS & Diffraction Check
+      int samples = static_cast<int>(dist_km * 20.0);
       if (samples < 5)
         samples = 5;
 
-      // reuse elevation_service logic or implement simple bresenham-like sampling
-      // Ideally elevation_service should have "check_los(p1, alt1, p2, alt2)"
-      // For now, we manually implement a simplified check to avoid heavy dependencies if service doesn't have it
-      // But elevation_service DOES have get_profile!
-      auto profile = elevation_service.get_profile(s_lat, s_lon, lat, lon, std::min(samples, 50));
+      auto profile = elevation_service.get_profile(s_lat, s_lon, lat, lon, std::min(samples, 100));
 
       if (!profile.empty())
       {
-        // Check profile
+        double total_d_m = dist_km * 1000.0;
         float start_h = static_cast<float>(s_amsl);
         float end_h = static_cast<float>(drone_amsl);
-        double total_d = dist_km * 1000.0;
 
         for (const auto &p : profile)
         {
-          double d_curr = p.first;
+          double d1_m = p.first;
+          double d2_m = total_d_m - d1_m;
+
+          if (d1_m < 1.0 || d2_m < 1.0)
+            continue; // Skip near-field
+
           float terrain_h = p.second;
+          float los_h = start_h + (end_h - start_h) * (float)(d1_m / total_d_m);
 
-          // LoS height at this distance
-          float los_h = start_h + (end_h - start_h) * (float)(d_curr / total_d);
+          // h_obs is height of obstacle ABOVE the LoS line
+          // Positive = Blocked, Negative = Clear
+          double h_obs_m = static_cast<double>(terrain_h - los_h);
 
-          if (terrain_h > los_h)
-          {
-            is_los = false;
-            break;
-          }
+          double v = rf_models::calculate_fresnel_parameter(d1_m, d2_m, h_obs_m, frequency_mhz);
+          if (v > max_v)
+            max_v = v;
         }
       }
 
-      // Building LoS Check (if available)
-      if (is_los && building_service)
+      // Building Diffraction Check
+      if (building_service)
       {
         geo_point_t s_pos = {s_lat, s_lon};
         geo_point_t drone_pos = {lat, lon};
 
-        // Helper to adjust highly altitude-aware checks could be added here.
-        // For now, get_buildings_on_path is 2D footprint intersection.
-        // If we want 3D check, we need to check if the ray height > building height.
-        // Since get_buildings_on_path returns intersections, we can filter them by height.
-
         auto intersections = building_service->get_buildings_on_path(s_pos, drone_pos);
+
+        double total_d_m = dist_km * 1000.0;
 
         for (const auto &intersection : intersections)
         {
           if (intersection.building)
           {
-            // Simple 3D Check: If the ray is lower than the building max height?
-            // We don't have precise ray-height-at-intersection here without math.
-            // Ray Height at Intersection Distance d_i:
-            // H(d_i) = H_start + (H_end - H_start) * (d_i / d_total)
+            double d1_m = geo::distance(s_lat, s_lon, intersection.entry_point.lat, intersection.entry_point.lon);
+            double d2_m = total_d_m - d1_m;
 
-            // Distance from sensor to intersection entry
-            double d_entry = geo::distance(s_lat, s_lon, intersection.entry_point.lat, intersection.entry_point.lon);
+            if (d1_m < 1.0 || d2_m < 1.0)
+              continue;
 
-            double total_dist_m = dist_km * 1000.0;
-            if (total_dist_m > 0.1)
-            {
-              double ratio = d_entry / total_dist_m;
-              double ray_height_amsl = s_amsl + ratio * (drone_amsl - s_amsl);
+            double ratio = d1_m / total_d_m;
+            double ray_height_amsl = s_amsl + ratio * (drone_amsl - s_amsl);
 
-              // Building Height is usually AGL. We need building Ground Elevation.
-              // intersection.building->height_m is Height Above Ground.
-              // We need ground elevation at building location.
-              float building_ground = 0.0f;
-              elevation_service.get_elevation(intersection.entry_point.lat, intersection.entry_point.lon, building_ground);
+            float building_ground = 0.0f;
+            elevation_service.get_elevation(intersection.entry_point.lat, intersection.entry_point.lon, building_ground);
 
-              double building_top_amsl = building_ground + intersection.building->height_m;
+            double building_top_amsl = building_ground + intersection.building->height_m;
 
-              if (ray_height_amsl < building_top_amsl)
-              {
-                is_los = false;
-                break;
-              }
-            }
-            else
-            {
-              // Too close, assume blocked if footprint hit
-              is_los = false;
-              break;
-            }
+            double h_obs_m = building_top_amsl - ray_height_amsl;
+
+            double v = rf_models::calculate_fresnel_parameter(d1_m, d2_m, h_obs_m, frequency_mhz);
+            if (v > max_v)
+              max_v = v;
           }
         }
       }
 
-      if (!is_los)
+      // Apply Loss based on worst obstruction
+      double diffraction_loss = rf_models::calculate_knife_edge_loss(max_v);
+
+      // Determine LoS state for visualization (blocked if loss > 6dB approx, i.e., v > 0)
+      bool is_los = true;
+      if (max_v > 0.0)
       {
-        // LoS Blocked: Apply heavy penalty or clamp to noise
-        // Shadowing loss? Let's just assume -20dB additional loss for NLOS or hard cut for simplicity?
-        // User wants "Accuracy" maybe? Let's assume Diffraction loss is not fully modeled yet,
-        // so we drop signal significantly.
-        res.los_blocked = true;
-        // For now, if no LoS, we don't consider it "Best" typically, or we apply massive attenuation.
-        // Let's model it as: Calc Path Loss, then subtract 30dB for Obstruction.
+        is_los = false;
       }
 
       // Calculate Path Loss
-      // Use sensor's model
       double path_loss = rf_models::calculate_path_loss(dist_km, frequency_mhz, s_mast, drone_altitude_agl_m, sensor.get_propagation_model());
 
-      // If NLOS, add penalty
-      if (!is_los)
-      {
-        path_loss += 30.0; // Simulated diffraction/obstruction loss
-      }
+      // Add Diffraction Loss
+      path_loss += diffraction_loss;
 
       // Antenna Gain (Omni drone = 0, Sensor Pattern)
       // Sensor Pattern Gain
