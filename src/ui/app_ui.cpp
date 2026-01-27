@@ -1013,13 +1013,13 @@ void AppUI::render_auto_placement(map_widget_t &map)
   ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.7f, 1.0f), "3. OPTIMIZATION");
   ImGui::Spacing();
 
-  static int strategy_idx = 0;
-  const char *strategies[] = {"Geometric (Fastest)", "Advanced (Best Coverage + LOS)"};
-  ImGui::Text("Optimization Strategy:");
+  static int strategy_idx = 3; // Default to Balanced
+  const char *strategies[] = {"Geometric (Fastest)", "Maximize Coverage", "Maximize TDOA (GDOP)", "Balanced (Default)"};
+  ImGui::Text("Optimization Objective:");
   ImGui::SetNextItemWidth(-1);
   ImGui::Combo("##strategy", &strategy_idx, strategies, IM_ARRAYSIZE(strategies));
   if (ImGui::IsItemHovered())
-    ImGui::SetTooltip("Geometric: Even spatial distribution.\nAdvanced: Iterative optimization considering obstacles and geometry.");
+    ImGui::SetTooltip("Choose the primary goal for sensor placement.");
 
   ImGui::Spacing();
 
@@ -1095,7 +1095,7 @@ void AppUI::render_auto_placement(map_widget_t &map)
         config.use_buildings = m_opt_use_buildings;
         config.use_terrain = m_opt_use_terrain;
         config.sensor_count = m_opt_sensor_count;
-        config.strategy = static_cast<OptimizationStrategy>(strategy_idx);
+        config.objective = static_cast<OptimizationObjective>(strategy_idx);
         auto building_ptrs = map.get_buildings_in_area(min_lat, max_lat, min_lon, max_lon);
         for (auto b_ptr : building_ptrs)
           if (b_ptr)
@@ -1136,7 +1136,7 @@ void AppUI::render_auto_placement(map_widget_t &map)
         config.use_buildings = m_opt_use_buildings;
         config.use_terrain = m_opt_use_terrain;
         config.sensor_count = m_opt_sensor_count;
-        config.strategy = static_cast<OptimizationStrategy>(strategy_idx);
+        config.objective = static_cast<OptimizationObjective>(strategy_idx);
         auto building_ptrs = map.get_buildings_in_area(min_lat, max_lat, min_lon, max_lon);
         for (auto b_ptr : building_ptrs)
           if (b_ptr)

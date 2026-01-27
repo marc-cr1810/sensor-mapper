@@ -11,10 +11,12 @@
 namespace sensor_mapper
 {
 
-enum class OptimizationStrategy
+enum class OptimizationObjective
 {
-  Geometric, // Fast, spacing + centering
-  Advanced   // Slow, GDOP + LOS
+  FastGeometric, // Fast, simple spacing
+  Coverage,      // Maximize LoS Area
+  TDOA,          // Minimize GDOP
+  Balanced       // Both (Default)
 };
 
 struct optimizer_config_t
@@ -22,7 +24,7 @@ struct optimizer_config_t
   bool use_buildings = false;
   bool use_terrain = false;
   int sensor_count = 3;
-  OptimizationStrategy strategy = OptimizationStrategy::Geometric;
+  OptimizationObjective objective = OptimizationObjective::Balanced;
 
   // Building Selection Constraints
   std::vector<std::string> priority_building_ids;

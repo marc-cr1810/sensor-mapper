@@ -1440,8 +1440,7 @@ auto map_widget_t::draw(std::vector<sensor_t> &sensors, std::set<int> &selected_
     if (ImGui::Selectable("Set TDOA Test Point"))
     {
       set_tdoa_test_point(m_ctx_lat, m_ctx_lon);
-      // Automatically enable analysis and hyperbolas for convenience
-      m_show_hyperbolas = true;
+      // Logic removed: Do not auto-enable hyperbolas
     }
     ImGui::Separator();
     if (ImGui::Selectable("Set Profile Start (A)"))
