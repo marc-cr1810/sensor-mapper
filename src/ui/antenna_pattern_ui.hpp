@@ -336,6 +336,53 @@ public:
         pattern->calculate_beamwidths();
       }
 
+      ImGui::SeparatorText("Pattern Operations");
+
+      static float gain_offset_db = 0.0f;
+      ImGui::InputFloat("Gain Offset (dB)", &gain_offset_db, 0.5f, 1.0f, "%.1f");
+      if (ImGui::Button("Apply Offset to Data"))
+      {
+        float new_max = -999.0f;
+        for (auto &row : pattern->gain_db)
+        {
+          for (auto &val : row)
+          {
+            val += gain_offset_db;
+            if (val > new_max)
+              new_max = val;
+          }
+        }
+        pattern->max_gain_dbi = new_max;
+      }
+
+      if (ImGui::Button("Scale Data to Match Max Gain"))
+      {
+        // Find current peak in data
+        float current_peak = -999.0f;
+        bool has_data = false;
+        for (const auto &row : pattern->gain_db)
+        {
+          for (float val : row)
+          {
+            if (val > current_peak)
+              current_peak = val;
+            has_data = true;
+          }
+        }
+
+        if (has_data)
+        {
+          float diff = pattern->max_gain_dbi - current_peak;
+          for (auto &row : pattern->gain_db)
+          {
+            for (auto &val : row)
+            {
+              val += diff;
+            }
+          }
+        }
+      }
+
       // Preview
       ImGui::SeparatorText("Quick Preview");
       render_pattern_mini_preview(pattern);

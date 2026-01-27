@@ -1,9 +1,9 @@
 #include "simulation_engine.hpp"
 #include "geo_math.hpp"
+#include "building_service.hpp" // Added for Occlusion Check
 #include "tdoa_solver.hpp"
 #include <cmath>
 #include <algorithm>
-#include <limits>
 
 namespace sensor_mapper
 {
@@ -111,13 +111,56 @@ std::vector<SimulationResult> SimulationEngine::run_simulation(const std::vector
       // Building LoS Check (if available)
       if (is_los && building_service)
       {
-        // This requires building service to support ray casting or checking intersection
-        // Assuming building_service doesn't fully support cheap raycast yet,
-        // we might skip or implement a "buildings between" check if building_service exposes it.
-        // Given the context, let's assume purely terrain LoS for this first iteration
-        // unless specific "check_ray_intersection" exists.
-        // Looking at map_widget usage, it uses "get_buildings_in_area".
-        // We can leave building LoS for "Advanced" iteration.
+        geo_point_t s_pos = {s_lat, s_lon};
+        geo_point_t drone_pos = {lat, lon};
+
+        // Helper to adjust highly altitude-aware checks could be added here.
+        // For now, get_buildings_on_path is 2D footprint intersection.
+        // If we want 3D check, we need to check if the ray height > building height.
+        // Since get_buildings_on_path returns intersections, we can filter them by height.
+
+        auto intersections = building_service->get_buildings_on_path(s_pos, drone_pos);
+
+        for (const auto &intersection : intersections)
+        {
+          if (intersection.building)
+          {
+            // Simple 3D Check: If the ray is lower than the building max height?
+            // We don't have precise ray-height-at-intersection here without math.
+            // Ray Height at Intersection Distance d_i:
+            // H(d_i) = H_start + (H_end - H_start) * (d_i / d_total)
+
+            // Distance from sensor to intersection entry
+            double d_entry = geo::distance(s_lat, s_lon, intersection.entry_point.lat, intersection.entry_point.lon);
+
+            double total_dist_m = dist_km * 1000.0;
+            if (total_dist_m > 0.1)
+            {
+              double ratio = d_entry / total_dist_m;
+              double ray_height_amsl = s_amsl + ratio * (drone_amsl - s_amsl);
+
+              // Building Height is usually AGL. We need building Ground Elevation.
+              // intersection.building->height_m is Height Above Ground.
+              // We need ground elevation at building location.
+              float building_ground = 0.0f;
+              elevation_service.get_elevation(intersection.entry_point.lat, intersection.entry_point.lon, building_ground);
+
+              double building_top_amsl = building_ground + intersection.building->height_m;
+
+              if (ray_height_amsl < building_top_amsl)
+              {
+                is_los = false;
+                break;
+              }
+            }
+            else
+            {
+              // Too close, assume blocked if footprint hit
+              is_los = false;
+              break;
+            }
+          }
+        }
       }
 
       if (!is_los)
