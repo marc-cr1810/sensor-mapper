@@ -1,5 +1,6 @@
 #include "simulation_ui.hpp"
 #include <vector>
+#include <portable-file-dialogs.h>
 
 namespace sensor_mapper
 {
@@ -67,14 +68,18 @@ bool SimulationUI::render(bool &is_open, map_widget_t &map, const std::vector<se
     ImGui::Spacing();
     ImGui::Separator();
     ImGui::TextDisabled("IMPORT LOG");
-    ImGui::InputTextWithHint("##logpath", "Path to .gpx or .csv", m_log_path_buf, sizeof(m_log_path_buf));
-    if (ImGui::Button("Load Log File", ImVec2(-1, 0)))
+    if (ImGui::Button("Load Log File...", ImVec2(-1, 0)))
     {
-      if (map.import_drone_path(m_log_path_buf))
+      auto selection = pfd::open_file("Open Flight Log", ".", {"Flight Logs", "*.gpx *.csv", "All Files", "*"}, pfd::opt::none).result();
+      if (!selection.empty())
       {
-        // Reset results
-        m_has_results = false;
-        m_last_results.clear();
+        std::string path = selection[0];
+        if (map.import_drone_path(path))
+        {
+          // Reset results
+          m_has_results = false;
+          m_last_results.clear();
+        }
       }
     }
 

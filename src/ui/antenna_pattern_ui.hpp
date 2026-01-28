@@ -9,6 +9,7 @@
 #include <memory>
 #include <string>
 #include <vector>
+#include <portable-file-dialogs.h>
 
 namespace sensor_mapper
 {
@@ -36,10 +37,7 @@ struct antenna_pattern_ui_state_t
   std::unique_ptr<antenna_pattern_3d_viewer_t> viewer_3d;
 
   // File I/O
-  bool show_load_dialog = false;
-  bool show_save_dialog = false;
-  char filepath_buffer[512] = "";
-  antenna_file_format_t selected_format = antenna_file_format_t::CSV;
+  // (Dialog state removed in favor of portable-file-dialogs)
 
   // Pattern comparison
   bool show_comparison_mode = false;
@@ -114,7 +112,26 @@ public:
     ImGui::SameLine();
     if (ImGui::Button("Load..."))
     {
-      state.show_load_dialog = true;
+      // Portable File Dialogs - Open File
+      auto selection =
+          pfd::open_file("Load Antenna Pattern", ".", {"Antenna Patterns", "*.csv *.json *.msi *.pln *.nsma *.txt", "CSV Files", "*.csv", "JSON Files", "*.json", "MSI Planet", "*.msi *.pln *.pla *.planet", "All Files", "*"}, pfd::opt::none)
+              .result();
+
+      if (!selection.empty())
+      {
+        std::string path = selection[0];
+        auto result = antenna_pattern_io_t::load_from_file(path, antenna_file_format_t::AUTO_DETECT);
+        if (result.success)
+        {
+          current_pattern = result.pattern;
+          add_to_recent(state, result.pattern);
+          pattern_changed = true;
+        }
+        else
+        {
+          pfd::message("Error", "Failed to load pattern file:\n" + result.error_message, pfd::choice::ok, pfd::icon::error);
+        }
+      }
     }
 
     if (current_pattern)
@@ -135,7 +152,28 @@ public:
       ImGui::SameLine();
       if (ImGui::Button("Save..."))
       {
-        state.show_save_dialog = true;
+        std::string default_name = current_pattern->name + ".csv";
+        // Sanitize filename roughly
+        std::replace(default_name.begin(), default_name.end(), ' ', '_');
+
+        auto destination = pfd::save_file("Save Antenna Pattern", default_name, {"CSV Files", "*.csv", "JSON Files", "*.json", "All Files", "*"}, pfd::opt::none).result();
+
+        if (!destination.empty())
+        {
+          antenna_file_format_t format = antenna_file_format_t::CSV;
+          // Check extension
+          std::string path = destination;
+          if (path.length() > 5 && path.substr(path.length() - 5) == ".json")
+          {
+            format = antenna_file_format_t::JSON;
+          }
+
+          auto result = antenna_pattern_io_t::save_to_file(*current_pattern, path, format);
+          if (!result.success)
+          {
+            pfd::message("Error", "Failed to save pattern file:\n" + result.error_message, pfd::choice::ok, pfd::icon::error);
+          }
+        }
       }
     }
 
@@ -149,26 +187,6 @@ public:
         add_to_recent(state, selected);
         pattern_changed = true;
         state.show_pattern_library = false;
-      }
-    }
-
-    if (state.show_load_dialog)
-    {
-      auto loaded = render_load_dialog(state);
-      if (loaded)
-      {
-        current_pattern = loaded;
-        add_to_recent(state, loaded);
-        pattern_changed = true;
-        state.show_load_dialog = false;
-      }
-    }
-
-    if (state.show_save_dialog && current_pattern)
-    {
-      if (render_save_dialog(state, *current_pattern))
-      {
-        state.show_save_dialog = false;
       }
     }
 
@@ -460,112 +478,7 @@ public:
     ImGui::End();
   }
 
-  // File load dialog
-  static auto render_load_dialog(antenna_pattern_ui_state_t &state) -> std::shared_ptr<antenna_pattern_t>
-  {
-    std::shared_ptr<antenna_pattern_t> loaded_pattern;
-
-    ImGui::SetNextWindowSize(ImVec2(500, 200), ImGuiCond_FirstUseEver);
-    if (ImGui::Begin("Load Antenna Pattern", &state.show_load_dialog))
-    {
-
-      ImGui::Text("File Path:");
-      ImGui::InputText("##filepath", state.filepath_buffer, 512);
-
-      ImGui::Text("Format:");
-      const char *formats[] = {"Auto-Detect", "CSV", "JSON", "MSI Planet", "NSMA", "XML"};
-      int format_idx = static_cast<int>(state.selected_format);
-      ImGui::Combo("##format", &format_idx, formats, 6);
-      state.selected_format = static_cast<antenna_file_format_t>(format_idx);
-
-      if (ImGui::Button("Load"))
-      {
-        auto result = antenna_pattern_io_t::load_from_file(state.filepath_buffer, state.selected_format);
-        if (result.success)
-        {
-          loaded_pattern = result.pattern;
-        }
-        else
-        {
-          // Show error (in a real app, use a proper message box)
-          ImGui::OpenPopup("Load Error");
-        }
-      }
-
-      ImGui::SameLine();
-      if (ImGui::Button("Cancel"))
-      {
-        state.show_load_dialog = false;
-      }
-
-      // Error popup
-      if (ImGui::BeginPopupModal("Load Error", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
-      {
-        ImGui::Text("Failed to load pattern file.");
-        if (ImGui::Button("OK"))
-        {
-          ImGui::CloseCurrentPopup();
-        }
-        ImGui::EndPopup();
-      }
-    }
-    ImGui::End();
-
-    return loaded_pattern;
-  }
-
-  // File save dialog
-  static auto render_save_dialog(antenna_pattern_ui_state_t &state, const antenna_pattern_t &pattern) -> bool
-  {
-    bool saved = false;
-
-    ImGui::SetNextWindowSize(ImVec2(500, 200), ImGuiCond_FirstUseEver);
-    if (ImGui::Begin("Save Antenna Pattern", &state.show_save_dialog))
-    {
-
-      ImGui::Text("File Path:");
-      ImGui::InputText("##filepath", state.filepath_buffer, 512);
-
-      ImGui::Text("Format:");
-      const char *formats[] = {"CSV", "JSON"};
-      int format_idx = (state.selected_format == antenna_file_format_t::JSON) ? 1 : 0;
-      ImGui::Combo("##format", &format_idx, formats, 2);
-      state.selected_format = (format_idx == 1) ? antenna_file_format_t::JSON : antenna_file_format_t::CSV;
-
-      if (ImGui::Button("Save"))
-      {
-        auto result = antenna_pattern_io_t::save_to_file(pattern, state.filepath_buffer, state.selected_format);
-        if (result.success)
-        {
-          saved = true;
-        }
-        else
-        {
-          ImGui::OpenPopup("Save Error");
-        }
-      }
-
-      ImGui::SameLine();
-      if (ImGui::Button("Cancel"))
-      {
-        saved = true; // Close without saving
-      }
-
-      // Error popup
-      if (ImGui::BeginPopupModal("Save Error", nullptr, ImGuiWindowFlags_AlwaysAutoResize))
-      {
-        ImGui::Text("Failed to save pattern file.");
-        if (ImGui::Button("OK"))
-        {
-          ImGui::CloseCurrentPopup();
-        }
-        ImGui::EndPopup();
-      }
-    }
-    ImGui::End();
-
-    return saved;
-  }
+  // File load/save dialogs removed in favor of native file dialogs
 
 private:
   // Helper: Add pattern to recent list

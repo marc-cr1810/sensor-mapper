@@ -114,6 +114,15 @@ FetchContent_Declare(
 )
 FetchContent_MakeAvailable(json)
 
+# Portable File Dialogs
+FetchContent_Declare(
+    pfd
+    GIT_REPOSITORY https://github.com/samhocevar/portable-file-dialogs.git
+    GIT_TAG        main
+
+)
+FetchContent_MakeAvailable(pfd)
+
 # PROJ for coordinate transformations (optional)
 find_package(PROJ QUIET)
 if(PROJ_FOUND)
@@ -205,6 +214,7 @@ target_include_directories(sensor_mapper PRIVATE
     ${imgui_SOURCE_DIR}/backends
     ${stb_SOURCE_DIR}
     ${glad_SOURCE_DIR}/include
+    ${pfd_SOURCE_DIR}
     ${lastools_SOURCE_DIR}/LASzip/src
     ${lastools_SOURCE_DIR}/LASlib/inc
 )

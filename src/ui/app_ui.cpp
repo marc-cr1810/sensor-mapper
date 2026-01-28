@@ -3,6 +3,7 @@
 #include "imgui.h"
 #include "imgui_internal.h" // For BeginViewportSideBar
 #include "core/persistence.hpp"
+#include <portable-file-dialogs.h>
 #include <cstdio>
 #include <cmath>
 #include <algorithm>
@@ -692,16 +693,16 @@ void AppUI::render_elevation_data(elevation_service_t &elevation_service, map_wi
 {
   ImGui::TextDisabled("LOCAL ELEVATION FILES");
 
-  static char file_path_buffer[512] = "";
   static std::string status_message = "";
   static bool status_is_error = false;
 
-  ImGui::InputText("Path", file_path_buffer, sizeof(file_path_buffer));
-  if (ImGui::Button("Load File", ImVec2(-1, 0)))
+  if (ImGui::Button("Load File...", ImVec2(-1, 0)))
   {
-    std::string path(file_path_buffer);
-    if (!path.empty())
+    auto selection = pfd::open_file("Open Elevation Data", ".", {"Elevation Files", "*.tif *.tiff *.las *.laz", "GeoTIFF", "*.tif *.tiff", "LIDAR", "*.las *.laz", "All Files", "*"}, pfd::opt::none).result();
+
+    if (!selection.empty())
     {
+      std::string path = selection[0];
       if (elevation_service.load_local_file(path))
       {
         status_message = "Loaded: " + path;

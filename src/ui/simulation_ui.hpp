@@ -42,7 +42,7 @@ private:
   // Graphing helpers
   void render_results_graph(map_widget_t &map);
 
-  char m_log_path_buf[1024] = "";
+  // char m_log_path_buf[1024] = ""; // Removed in favor of file dialog
 };
 
 } // namespace sensor_mapper
