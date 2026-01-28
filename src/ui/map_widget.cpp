@@ -699,6 +699,75 @@ auto map_widget_t::draw(std::vector<sensor_t> &sensors, std::set<int> &selected_
     auto buildings = m_building_service->get_buildings_in_area(min_lat, max_lat, min_lon, max_lon);
 
     std::set<std::string> rendered_ids;
+
+    // --- Pre-pass: Identify Topmost Hovered Building ---
+    const building_t *topmost_hovered_building = nullptr;
+
+    if (m_selection_mode != SelectionMode::None)
+    {
+      for (const auto *building : buildings)
+      {
+        if (!building || building->footprint.empty())
+          continue;
+
+        // Visibility Logic (Must match potential visibility in main loop)
+        bool is_priority = m_priority_buildings.count(building->id);
+        bool is_excluded = m_excluded_buildings.count(building->id);
+        bool is_tagged = is_priority || is_excluded;
+
+        if (m_show_target_area)
+        {
+          // In target area mode (picking), we show everything potentially
+        }
+        else
+        {
+          // If mostly hidden, we can skip hit test?
+          // For safety, let's just check bounds if relevant or just check everything in 'buildings' list
+          // since the list is already spatially queried.
+          if (!m_show_buildings && !is_tagged)
+            continue;
+        }
+
+        // Quick AABB Hit Test on Lat/Lon first?
+        // No, need screen coords for precise mouse check.
+        // Copy projection logic (Relevant parts)
+        float min_x_s = 1e9f, max_x_s = -1e9f, min_y_s = 1e9f, max_y_s = -1e9f;
+        bool valid_poly = false;
+
+        // We only need bounds for simple hit test
+        for (const auto &pt : building->footprint)
+        {
+          double wx, wy;
+          geo::lat_lon_to_world(pt.lat, pt.lon, wx, wy);
+          if (wx - center_wx > 0.5)
+            wx -= 1.0;
+          if (wx - center_wx < -0.5)
+            wx += 1.0;
+
+          float px = static_cast<float>((wx - center_wx) * world_size_pixels + screen_center.x);
+          float py = static_cast<float>((wy - center_wy) * world_size_pixels + screen_center.y);
+
+          if (px < min_x_s)
+            min_x_s = px;
+          if (px > max_x_s)
+            max_x_s = px;
+          if (py < min_y_s)
+            min_y_s = py;
+          if (py > max_y_s)
+            max_y_s = py;
+          valid_poly = true;
+        }
+
+        if (valid_poly)
+        {
+          if (mouse_pos_screen_current.x >= min_x_s && mouse_pos_screen_current.x <= max_x_s && mouse_pos_screen_current.y >= min_y_s && mouse_pos_screen_current.y <= max_y_s)
+          {
+            topmost_hovered_building = building;
+          }
+        }
+      }
+    }
+
     for (const auto *building : buildings)
     {
       if (!building || building->footprint.empty())
@@ -777,13 +846,13 @@ auto map_widget_t::draw(std::vector<sensor_t> &sensors, std::set<int> &selected_
         ImU32 fill_color = IM_COL32(100, 100, 100, 150);
         ImU32 outline_color = IM_COL32(200, 200, 200, 255);
 
-        // Check Hover Early for visual feedback
-        bool is_hovered_building = false;
-        if (m_selection_mode != SelectionMode::None)
+        // Check Hover using Pre-calculated Topmost Building
+        bool is_hovered_building = (building == topmost_hovered_building);
+
+        if (is_hovered_building)
         {
-          if (mouse_pos_screen_current.x >= min_x && mouse_pos_screen_current.x <= max_x && mouse_pos_screen_current.y >= min_y && mouse_pos_screen_current.y <= max_y)
+          if (m_selection_mode != SelectionMode::None)
           {
-            is_hovered_building = true;
             fill_color = IM_COL32(100, 150, 255, 200); // Blue Highlight
             outline_color = IM_COL32(150, 200, 255, 255);
           }
@@ -818,53 +887,7 @@ auto map_widget_t::draw(std::vector<sensor_t> &sensors, std::set<int> &selected_
         }
         draw_list->AddPolyline(screen_points.data(), screen_points.size(), outline_color, true, 2.0f);
 
-        // Interaction (Selection Mode)
-        if (m_selection_mode != SelectionMode::None)
-        {
-          // Check Hover (Simple AABB check first, then polygon)
-          if (mouse_pos_screen_current.x >= min_x && mouse_pos_screen_current.x <= max_x && mouse_pos_screen_current.y >= min_y && mouse_pos_screen_current.y <= max_y)
-          {
-            // Tooltip
-            ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8, 8));
-            ImGui::BeginTooltip();
-            if (!building->name.empty())
-            {
-              ImGui::Text("%s", building->name.c_str());
-              ImGui::TextDisabled("%s", building->id.c_str());
-            }
-            else
-            {
-              ImGui::Text("Building ID: %s", building->id.c_str());
-            }
-            ImGui::EndTooltip();
-            ImGui::PopStyleVar();
-
-            // Click to Toggle
-            if (ImGui::IsMouseClicked(ImGuiMouseButton_Left))
-            {
-              if (m_selection_mode == SelectionMode::Priority)
-              {
-                if (is_priority)
-                  m_priority_buildings.erase(building->id);
-                else
-                {
-                  m_priority_buildings.insert(building->id);
-                  m_excluded_buildings.erase(building->id); // Mutually exclusive
-                }
-              }
-              else if (m_selection_mode == SelectionMode::Exclude)
-              {
-                if (is_excluded)
-                  m_excluded_buildings.erase(building->id);
-                else
-                {
-                  m_excluded_buildings.insert(building->id);
-                  m_priority_buildings.erase(building->id);
-                }
-              }
-            }
-          }
-        }
+        // Interaction (Selection Mode) - Collection Phase removed, we have the winner.
 
         // "3D" Extrusion (fake perspective)
         // Show 3D whenever the building is visible (respecting LOD), UNLESS the tool is open.
@@ -928,6 +951,55 @@ auto map_widget_t::draw(std::vector<sensor_t> &sensors, std::set<int> &selected_
             }
           }
           draw_list->AddPolyline(roof_points.data(), roof_points.size(), outline_color, true, 1.5f);
+        }
+      }
+    }
+
+    // Process Interactions on the Topmost Building
+    if (topmost_hovered_building)
+    {
+      const building_t *target_building = topmost_hovered_building;
+
+      // Tooltip
+      ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(8, 8));
+      ImGui::BeginTooltip();
+      if (!target_building->name.empty())
+      {
+        ImGui::Text("%s", target_building->name.c_str());
+        ImGui::TextDisabled("%s", target_building->id.c_str());
+      }
+      else
+      {
+        ImGui::Text("Building ID: %s", target_building->id.c_str());
+      }
+      ImGui::EndTooltip();
+      ImGui::PopStyleVar();
+
+      // Click to Toggle
+      if (ImGui::IsMouseClicked(ImGuiMouseButton_Left))
+      {
+        bool is_priority = m_priority_buildings.count(target_building->id);
+        bool is_excluded = m_excluded_buildings.count(target_building->id);
+
+        if (m_selection_mode == SelectionMode::Priority)
+        {
+          if (is_priority)
+            m_priority_buildings.erase(target_building->id);
+          else
+          {
+            m_priority_buildings.insert(target_building->id);
+            m_excluded_buildings.erase(target_building->id); // Mutually exclusive
+          }
+        }
+        else if (m_selection_mode == SelectionMode::Exclude)
+        {
+          if (is_excluded)
+            m_excluded_buildings.erase(target_building->id);
+          else
+          {
+            m_excluded_buildings.insert(target_building->id);
+            m_priority_buildings.erase(target_building->id);
+          }
         }
       }
     }
