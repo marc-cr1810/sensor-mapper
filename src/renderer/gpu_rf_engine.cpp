@@ -119,28 +119,51 @@ auto gpu_rf_engine_t::generate_elevation_data(elevation_service_t *service, cons
   std::vector<float> data(w * h, 0.0f);
 
   // 1. Load Terrain
-  // Note: elevation_service->get_elevation is cached and reasonably thread-safe for reading
-  // IF the cache isn't being mutated.
-  // Assuming basic thread safety of elevation_service or that it's read-only here.
-  // Ideally, elevation service should be locking its cache.
-  // For now, we assume it's acceptable or risk minor race on cache insertion.
-
+  // Query all pixels - elevation_service will handle fallback from GeoTIFF to Terrarium automatically
+  int no_data_count = 0;
   for (int y = 0; y < h; ++y)
   {
     double t = (double)y / (h - 1);
     double lat = min_lat + t * (max_lat - min_lat);
+
     for (int x = 0; x < w; ++x)
     {
       double u = (double)x / (w - 1);
       double lon = min_lon + u * (max_lon - min_lon);
 
       float elev = 0.0f;
+      bool has_data = false;
       if (service)
-        service->get_elevation(lat, lon, elev);
+        has_data = service->get_elevation(lat, lon, elev);
 
-      // Store in non-flipped buffer first
+      // If no data yet, wait a bit for Terrarium tiles to load (up to 2 attempts)
+      if (!has_data && service)
+      {
+        // Call update() to process any pending Terrarium tiles
+        service->update();
+        std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        has_data = service->get_elevation(lat, lon, elev);
+      }
+
+      if (!has_data)
+      {
+        no_data_count++;
+        // Use a reasonable default elevation (100m) instead of 0, which can cause issues
+        // with RF propagation calculations when all sources fail
+        elev = 100.0f;
+      }
+
       data[y * w + x] = elev;
     }
+  }
+
+  if (no_data_count > 0)
+  {
+    std::printf("GPU RF Engine: %d/%d pixels had no elevation data (%.1f%%), using 100m default\n", no_data_count, w * h, 100.0f * no_data_count / (w * h));
+  }
+  else
+  {
+    std::printf("GPU RF Engine: Generated %dx%d elevation texture successfully\n", w, h);
   }
 
   // 2. Rasterize Buildings (Thread safe using copies)

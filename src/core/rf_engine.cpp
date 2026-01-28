@@ -55,10 +55,7 @@ auto rf_engine_t::compute_coverage(const std::vector<sensor_t> &sensors, elevati
 
                           // Cache cell elevation locally if possible
                           float cell_elevation_m = 0.0f;
-                          if (elevation_service)
-                          {
-                            elevation_service->get_elevation(cell_lat, cell_lon, cell_elevation_m);
-                          }
+                          bool has_elevation = false;
 
                           double max_dbm = -200.0;
 
@@ -68,6 +65,12 @@ auto rf_engine_t::compute_coverage(const std::vector<sensor_t> &sensors, elevati
 
                             if (dist_m > sensor.get_range())
                               continue;
+
+                            if (!has_elevation && elevation_service)
+                            {
+                              elevation_service->get_elevation(cell_lat, cell_lon, cell_elevation_m);
+                              has_elevation = true;
+                            }
 
                             double angle = geo::bearing(sensor.get_latitude(), sensor.get_longitude(), cell_lat, cell_lon);
 

@@ -58,6 +58,18 @@ auto elevation_service_t::get_elevation(double lat, double lon, float &out_heigh
   // Iterate sources (LIFO for priority)
   for (auto it = m_sources.rbegin(); it != m_sources.rend(); ++it)
   {
+    // Check if this source has bounds and if the coordinate is within them
+    double min_lat, max_lat, min_lon, max_lon;
+    if ((*it)->get_bounds(min_lat, max_lat, min_lon, max_lon))
+    {
+      // Source has defined bounds - check if coordinate is within them
+      if (lat < min_lat || lat > max_lat || lon < min_lon || lon > max_lon)
+      {
+        // Skip this source - coordinate is out of bounds
+        continue;
+      }
+    }
+    // Either no bounds defined (e.g., Terrarium covers everything) or within bounds
     if ((*it)->get_elevation(lat, lon, out_height))
     {
       return true;
