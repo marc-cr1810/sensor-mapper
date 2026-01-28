@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cpr/cpr.h>
 #include <filesystem>
+#include <sstream>
 #include <fstream>
 #include <format>
 #include <future>
@@ -10,6 +11,9 @@
 #include <map>
 #include <thread>
 #include <chrono>
+#include <optional>
+#include <set>
+#include <unordered_set>
 
 #include <nlohmann/json.hpp>
 
@@ -24,15 +28,24 @@ using json = nlohmann::json;
 // Pimpl implementation
 struct building_service_t::impl_t
 {
-  std::vector<building_t> buildings;
-  std::map<std::string, bool> loaded_areas; // Track loaded tiles
+  // --- STORAGE ---
+  // Store buildings by Tile Key.
+  // Using shared_ptr ensures that pointers handed out to the UI remain valid
+  // even if the vector reallocates or if we decide to move things around.
+  // When unloading a tile, we remove the entry from this map.
+  std::map<std::string, std::vector<std::shared_ptr<building_t>>> tile_storage;
 
-  // Spatial Index: Grid Key (lat_idx, lon_idx) -> List of building indices
+  // Track loaded tiles (true = loaded, false = pending/fetching)
+  std::map<std::string, bool> loaded_areas;
+
+  // Spatial Index: Grid Key (lat_idx, lon_idx) -> List of weak_ptr to buildings
+  // using weak_ptr prevents dangling pointers if a tile is unloaded.
   using grid_key_t = std::pair<int, int>;
-  std::map<grid_key_t, std::vector<size_t>> spatial_grid;
+  std::map<grid_key_t, std::vector<std::weak_ptr<building_t>>> spatial_grid;
 
   // New Tiling / Queue system
-  static constexpr double FETCH_TILE_SIZE = 0.01;
+  // New Tiling / Queue system
+  static constexpr double FETCH_TILE_SIZE = 0.005;
 
   struct fetch_request_t
   {
@@ -40,11 +53,22 @@ struct building_service_t::impl_t
     double min_lat, max_lat, min_lon, max_lon;
   };
   std::vector<fetch_request_t> request_queue;
+  std::unordered_set<std::string> queued_keys; // For O(1) existence checks
+  std::map<std::string, std::chrono::steady_clock::time_point> failed_tiles;
+
+  // Result of an async fetch operation
+  struct fetch_result_t
+  {
+    std::string area_key;
+    std::vector<std::shared_ptr<building_t>> buildings;
+    // Pre-calculated spatial keys for fast insertion on main thread
+    std::vector<std::pair<grid_key_t, size_t>> spatial_indices; // pair<grid_key, building_index_in_vector>
+  };
 
   struct active_fetch_t
   {
     std::string area_key;
-    std::future<std::vector<building_t>> data_future;
+    std::future<std::optional<fetch_result_t>> data_future;
   };
   std::vector<active_fetch_t> active_fetches;
 
@@ -60,33 +84,17 @@ struct building_service_t::impl_t
     return {static_cast<int>(std::floor(lat / GRID_CELL_SIZE)), static_cast<int>(std::floor(lon / GRID_CELL_SIZE))};
   }
 
-  // Helper: Add building to spatial index
-  auto add_to_spatial_index(size_t index) -> void
+  // Helper: Prune invalid weak_ptrs from a spatial grid cell
+  // This is proper "Lazy Cleanup"
+  auto prune_spatial_cell(std::vector<std::weak_ptr<building_t>> &cell) -> void
   {
-    const auto &b = buildings[index];
-    if (b.footprint.empty())
-      return;
-
-    // Simple approach: Add to key of the first point
-    auto key = get_grid_key(b.footprint[0].lat, b.footprint[0].lon);
-    spatial_grid[key].push_back(index);
-  }
-
-  auto get_candidates(double lat, double lon) const -> const std::vector<size_t> *
-  {
-    auto key = get_grid_key(lat, lon);
-    auto it = spatial_grid.find(key);
-    if (it != spatial_grid.end())
-    {
-      return &it->second;
-    }
-    return nullptr;
+    cell.erase(std::remove_if(cell.begin(), cell.end(), [](const std::weak_ptr<building_t> &wp) { return wp.expired(); }), cell.end());
   }
 
   // Helper: Parse OSM JSON response
-  static auto parse_osm_buildings_json(const std::string &json_data) -> std::vector<building_t>
+  static auto parse_osm_buildings_json(const std::string &json_data) -> std::vector<std::shared_ptr<building_t>>
   {
-    std::vector<building_t> result;
+    std::vector<std::shared_ptr<building_t>> result;
 
     try
     {
@@ -110,28 +118,28 @@ struct building_service_t::impl_t
       {
         if (el["type"] == "way" && el.contains("tags") && el["tags"].contains("building"))
         {
-          building_t building;
-          building.id = std::to_string(el["id"].get<int64_t>());
+          auto building = std::make_shared<building_t>();
+          building->id = std::to_string(el["id"].get<int64_t>());
 
           // Defaults
-          building.material = material_type_e::CONCRETE;
-          building.height_m = 10.0;
+          building->material = material_type_e::CONCRETE;
+          building->height_m = 10.0;
 
           // Parse tags
           const auto &tags = el["tags"];
 
           if (tags.contains("name"))
           {
-            building.name = tags["name"].get<std::string>();
+            building->name = tags["name"].get<std::string>();
           }
 
           if (tags.contains("addr:housenumber") && tags.contains("addr:street"))
           {
-            building.address = tags["addr:housenumber"].get<std::string>() + " " + tags["addr:street"].get<std::string>();
+            building->address = tags["addr:housenumber"].get<std::string>() + " " + tags["addr:street"].get<std::string>();
           }
           else if (tags.contains("addr:street"))
           {
-            building.address = tags["addr:street"].get<std::string>();
+            building->address = tags["addr:street"].get<std::string>();
           }
 
           if (tags.contains("height"))
@@ -143,7 +151,7 @@ struct building_service_t::impl_t
               auto pos = h_str.find(" ");
               if (pos != std::string::npos)
                 h_str = h_str.substr(0, pos);
-              building.height_m = std::stod(h_str);
+              building->height_m = std::stod(h_str);
             }
             catch (...)
             {
@@ -154,7 +162,7 @@ struct building_service_t::impl_t
             try
             {
               double levels = std::stod(tags["building:levels"].get<std::string>());
-              building.height_m = levels * 3.0;
+              building->height_m = levels * 3.0;
             }
             catch (...)
             {
@@ -169,12 +177,12 @@ struct building_service_t::impl_t
               auto it = nodes.find(node_id);
               if (it != nodes.end())
               {
-                building.footprint.push_back(it->second);
+                building->footprint.push_back(it->second);
               }
             }
           }
 
-          if (building.footprint.size() >= 3)
+          if (building->footprint.size() >= 3)
           {
             result.push_back(building);
           }
@@ -184,6 +192,8 @@ struct building_service_t::impl_t
     catch (const std::exception &e)
     {
       std::cerr << "JSON Parsing Error: " << e.what() << std::endl;
+      // Depending on severity, we might want to throw or return empty.
+      // Returning internal result so far is safer than crash.
     }
 
     return result;
@@ -223,11 +233,8 @@ auto building_service_t::fetch_buildings(double min_lat, double max_lat, double 
   constexpr double STEP = impl_t::FETCH_TILE_SIZE;
 
   // Calculate grid indices
-  // Ensure we cover the full range
   int start_lat_idx = static_cast<int>(std::floor(min_lat / STEP));
-  int end_lat_idx = static_cast<int>(std::floor(max_lat / STEP)); // Wait, if max_lat is exactly on boundary?
-  // If max_lat = 10.01, floor = 1001. We want to include 10.01? Yes.
-  // Actually, standard iteration: i <= end_idx is correct if we consider tiles [i*STEP, (i+1)*STEP).
+  int end_lat_idx = static_cast<int>(std::floor(max_lat / STEP));
 
   int start_lon_idx = static_cast<int>(std::floor(min_lon / STEP));
   int end_lon_idx = static_cast<int>(std::floor(max_lon / STEP));
@@ -235,7 +242,6 @@ auto building_service_t::fetch_buildings(double min_lat, double max_lat, double 
   // Limit max tiles to prevent explosion if zoomed out too far
   if ((end_lat_idx - start_lat_idx) * (end_lon_idx - start_lon_idx) > 100)
   {
-    // Too many tiles requested, probably zoomed out to space. Ignore.
     return;
   }
 
@@ -255,7 +261,7 @@ auto building_service_t::fetch_buildings(double min_lat, double max_lat, double 
       if (m_impl->loaded_areas.count(area_key))
         continue;
 
-      // Check active
+      // Check active (linear scan is fine for small N=2-5 active fetches)
       bool active = false;
       for (const auto &af : m_impl->active_fetches)
       {
@@ -268,22 +274,28 @@ auto building_service_t::fetch_buildings(double min_lat, double max_lat, double 
       if (active)
         continue;
 
-      // Check queued
-      bool queued = false;
-      for (const auto &qf : m_impl->request_queue)
+      // Check queued - O(1) lookup now
+      if (m_impl->queued_keys.count(area_key))
+        continue;
+
+      // Check failed cooldown
+      auto fail_it = m_impl->failed_tiles.find(area_key);
+      if (fail_it != m_impl->failed_tiles.end())
       {
-        if (qf.area_key == area_key)
+        if (std::chrono::steady_clock::now() < fail_it->second)
         {
-          queued = true;
-          break;
+          continue; // Still cooling down
+        }
+        else
+        {
+          m_impl->failed_tiles.erase(fail_it); // Cooldown expired
         }
       }
-      if (queued)
-        continue;
 
       // Add to queue
       m_impl->request_queue.push_back({area_key, t_min_lat, t_max_lat, t_min_lon, t_max_lon});
-      m_impl->loaded_areas[area_key] = false; // Mark as pending (so we don't queue again)
+      m_impl->queued_keys.insert(area_key);
+      m_impl->loaded_areas[area_key] = false;
     }
   }
 }
@@ -300,7 +312,7 @@ auto building_service_t::get_buildings_in_area(double min_lat, double max_lat, d
   std::vector<const building_t *> result;
 
   // Determine grid cells covering the area
-  // Expand search by 1 grid cell in each direction to catch buildings that cross boundaries
+  // Expand search by 1 grid cell in each direction
   auto start_key = m_impl->get_grid_key(min_lat - GRID_CELL_SIZE, min_lon - GRID_CELL_SIZE);
   auto end_key = m_impl->get_grid_key(max_lat + GRID_CELL_SIZE, max_lon + GRID_CELL_SIZE);
 
@@ -312,15 +324,23 @@ auto building_service_t::get_buildings_in_area(double min_lat, double max_lat, d
       if (it == m_impl->spatial_grid.end())
         continue;
 
-      for (size_t idx : it->second)
+      // Cleanup expired pointers lazily
+      // Note: modifying the vector in a const function via mutable would be ideal,
+      // but standard vector isn't mutable.
+      // Instead, we skip expired ones. Cleanup happens in non-const ops or specific maintenance.
+
+      for (const auto &wp : it->second)
       {
-        const auto &building = m_impl->buildings[idx];
-        if (building.footprint.empty())
+        auto sp = wp.lock();
+        if (!sp)
+          continue;
+
+        if (sp->footprint.empty())
           continue;
 
         // Check if ANY point of footprint is within the bbox
         bool in_bbox = false;
-        for (const auto &pt : building.footprint)
+        for (const auto &pt : sp->footprint)
         {
           if (pt.lat >= min_lat && pt.lat <= max_lat && pt.lon >= min_lon && pt.lon <= max_lon)
           {
@@ -331,20 +351,20 @@ auto building_service_t::get_buildings_in_area(double min_lat, double max_lat, d
 
         if (in_bbox)
         {
-          result.push_back(&building);
+          result.push_back(sp.get());
         }
       }
     }
   }
 
-  // Remove duplicates resulting from grid overlap
+  // Remove duplicates
   std::sort(result.begin(), result.end());
   result.erase(std::unique(result.begin(), result.end()), result.end());
 
   return result;
 }
 
-auto building_service_t::is_area_loaded(double /*lat*/, double /*lon*/) const -> bool
+auto building_service_t::is_area_loaded(double, double) const -> bool
 {
   return false;
 }
@@ -352,19 +372,21 @@ auto building_service_t::is_area_loaded(double /*lat*/, double /*lon*/) const ->
 auto building_service_t::get_building_at(double lat, double lon) const -> const building_t *
 {
   geo_point_t point = {lat, lon};
+  auto key = m_impl->get_grid_key(lat, lon);
+  auto it = m_impl->spatial_grid.find(key);
 
-  // 1. Get candidates from spatial index
-  auto *candidates = m_impl->get_candidates(lat, lon);
-  if (!candidates)
-    return nullptr;
-
-  // 2. Exact check
-  for (size_t idx : *candidates)
+  if (it != m_impl->spatial_grid.end())
   {
-    const auto &building = m_impl->buildings[idx];
-    if (m_impl->point_in_polygon(point, building.footprint))
+    for (const auto &wp : it->second)
     {
-      return &building;
+      auto sp = wp.lock();
+      if (!sp)
+        continue;
+
+      if (m_impl->point_in_polygon(point, sp->footprint))
+      {
+        return sp.get();
+      }
     }
   }
   return nullptr;
@@ -415,8 +437,7 @@ auto building_service_t::get_buildings_on_path(geo_point_t start, geo_point_t en
   auto start_key = m_impl->get_grid_key(min_lat, min_lon);
   auto end_key = m_impl->get_grid_key(max_lat, max_lon);
 
-  std::vector<const building_t *> candidates;
-  std::vector<size_t> candidate_indices;
+  std::vector<std::shared_ptr<building_t>> candidates;
 
   for (int lat_idx = start_key.first; lat_idx <= end_key.first; ++lat_idx)
   {
@@ -425,19 +446,21 @@ auto building_service_t::get_buildings_on_path(geo_point_t start, geo_point_t en
       auto it = m_impl->spatial_grid.find({lat_idx, lon_idx});
       if (it != m_impl->spatial_grid.end())
       {
-        candidate_indices.insert(candidate_indices.end(), it->second.begin(), it->second.end());
+        for (const auto &wp : it->second)
+        {
+          if (auto sp = wp.lock())
+            candidates.push_back(sp);
+        }
       }
     }
   }
-  std::sort(candidate_indices.begin(), candidate_indices.end());
-  candidate_indices.erase(std::unique(candidate_indices.begin(), candidate_indices.end()), candidate_indices.end());
+  std::sort(candidates.begin(), candidates.end());
+  candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
 
-  for (size_t idx : candidate_indices)
+  for (const auto &building : candidates)
   {
-    const auto &building = m_impl->buildings[idx];
-
     bool possible = false;
-    for (const auto &pt : building.footprint)
+    for (const auto &pt : building->footprint)
     {
       if ((pt.lat > min_lat - 0.0001 && pt.lat < max_lat + 0.0001 && pt.lon > min_lon - 0.0001 && pt.lon < max_lon + 0.0001))
       {
@@ -447,12 +470,12 @@ auto building_service_t::get_buildings_on_path(geo_point_t start, geo_point_t en
     }
     if (!possible)
     {
-      if (!m_impl->point_in_polygon(start, building.footprint) && !m_impl->point_in_polygon(end, building.footprint))
+      if (!m_impl->point_in_polygon(start, building->footprint) && !m_impl->point_in_polygon(end, building->footprint))
         continue;
     }
 
     std::vector<geo_point_t> intersections;
-    const auto &poly = building.footprint;
+    const auto &poly = building->footprint;
 
     for (size_t i = 0; i < poly.size(); ++i)
     {
@@ -475,7 +498,7 @@ auto building_service_t::get_buildings_on_path(geo_point_t start, geo_point_t en
       for (size_t i = 0; i + 1 < intersections.size(); i += 2)
       {
         building_intersection_t bi;
-        bi.building = const_cast<building_t *>(&building);
+        bi.building = building.get();
         bi.entry_point = intersections[i];
         bi.exit_point = intersections[i + 1];
         bi.distance_through_m = dist_m(bi.entry_point, bi.exit_point);
@@ -492,30 +515,86 @@ auto building_service_t::update() -> bool
 {
   bool new_data = false;
 
+
+  // 0. Active Re-queueing of Failed Tiles
+  auto fail_it = m_impl->failed_tiles.begin();
+  while (fail_it != m_impl->failed_tiles.end())
+  {
+    if (std::chrono::steady_clock::now() >= fail_it->second)
+    {
+      // Cooldown expired, re-queue!
+      std::string area_key = fail_it->first;
+
+      // Parse key back to coordinates to re-create request
+      // Key format: "{:.4f},{:.4f},{:.4f},{:.4f}"
+      double min_lat, max_lat, min_lon, max_lon;
+      char comma;
+      std::stringstream ss(area_key);
+      ss >> min_lat >> comma >> max_lat >> comma >> min_lon >> comma >> max_lon;
+
+      m_impl->request_queue.push_back({area_key, min_lat, max_lat, min_lon, max_lon});
+      m_impl->queued_keys.insert(area_key); // Mark as queued again
+
+      fail_it = m_impl->failed_tiles.erase(fail_it);
+      std::cout << "Retry cooldown expired for " << area_key << ", re-queued." << std::endl;
+    }
+    else
+    {
+      ++fail_it;
+    }
+  }
+
   // 1. Process Active Fetches
   auto it = m_impl->active_fetches.begin();
   while (it != m_impl->active_fetches.end())
   {
     if (it->data_future.wait_for(std::chrono::seconds(0)) == std::future_status::ready)
     {
-      auto new_buildings = it->data_future.get();
+      // Retrieve Result (Non-blocking as future is ready)
+      auto result_opt = it->data_future.get();
       std::string current_key = it->area_key;
 
-      if (!new_buildings.empty())
+      if (result_opt.has_value())
       {
-        size_t start_idx = m_impl->buildings.size();
-        m_impl->buildings.insert(m_impl->buildings.end(), new_buildings.begin(), new_buildings.end());
+        auto &res = result_opt.value();
 
-        for (size_t i = 0; i < new_buildings.size(); ++i)
+        // --- CRITICAL SECTION START ---
+        // Merge into main thread structures quickly
+
+        // 1. Store ownership
+        m_impl->tile_storage[current_key] = std::move(res.buildings);
+
+        // 2. Update spatial index (using weak_ptrs to the newly stored shared_ptrs)
+        // Access the vector we just moved
+        const auto &stored_buildings = m_impl->tile_storage[current_key];
+
+        for (const auto &[grid_key, idx] : res.spatial_indices)
         {
-          m_impl->add_to_spatial_index(start_idx + i);
+          if (idx < stored_buildings.size())
+          {
+            m_impl->spatial_grid[grid_key].push_back(stored_buildings[idx]);
+          }
+        }
+        // --- CRITICAL SECTION END ---
+
+        if (!stored_buildings.empty())
+        {
+          std::cout << "Loaded " << stored_buildings.size() << " buildings for tile: " << current_key << std::endl;
+          new_data = true;
         }
 
-        std::cout << "Loaded " << new_buildings.size() << " buildings for tile: " << current_key << std::endl;
-        new_data = true;
+        m_impl->loaded_areas[current_key] = true;
+        m_impl->failed_tiles.erase(current_key); // Clear failure if it existed
+      }
+      else
+      {
+        // Failure: Do NOT mark as loaded. Remove from loaded_areas so it can be retried.
+        std::cerr << "Failed to fetch/parse buildings for tile: " << current_key << ". Will retry in 10s." << std::endl;
+        m_impl->loaded_areas.erase(current_key);
+        // Set cooldown
+        m_impl->failed_tiles[current_key] = std::chrono::steady_clock::now() + std::chrono::seconds(10);
       }
 
-      m_impl->loaded_areas[current_key] = true;
       it = m_impl->active_fetches.erase(it);
     }
     else
@@ -525,40 +604,39 @@ auto building_service_t::update() -> bool
   }
 
   // 2. Schedule New Fetches (Max 2 concurrent)
-  // Process up to queue end if limit permits
   while (m_impl->active_fetches.size() < 2 && !m_impl->request_queue.empty())
   {
-    auto req = m_impl->request_queue.front();
+    auto req = m_impl->request_queue.back(); // LIFO or FIFO? standard is FIFO usually, but back() is LIFO. Let's start with begin()
+    req = m_impl->request_queue.front();
     m_impl->request_queue.erase(m_impl->request_queue.begin());
+    m_impl->queued_keys.erase(req.area_key); // Remove from optimization set
 
-    // Start Async Task
-    double min_lat = req.min_lat;
-    double max_lat = req.max_lat;
-    double min_lon = req.min_lon;
-    double max_lon = req.max_lon;
-    std::string area_key = req.area_key;
+    auto area_key = req.area_key;
 
     // Cache logic
     namespace fs = std::filesystem;
     std::string cache_dir = ".cache/osm";
     if (!fs::exists(cache_dir))
       fs::create_directories(cache_dir);
-    std::string cache_filename = std::format("{}/osm_{:.4f}_{:.4f}_{:.4f}_{:.4f}.json", cache_dir, min_lat, max_lat, min_lon, max_lon);
+    std::string cache_filename = std::format("{}/osm_{:.4f}_{:.4f}_{:.4f}_{:.4f}.json", cache_dir, req.min_lat, req.max_lat, req.min_lon, req.max_lon);
 
-    std::string query = std::format("[out:json];"
+    std::string query = std::format("[out:json][timeout:90];"
                                     "("
                                     "  way[\"building\"]({:.5f},{:.5f},{:.5f},{:.5f});"
                                     "  relation[\"building\"]({:.5f},{:.5f},{:.5f},{:.5f});"
                                     ");"
                                     "out body;>;out skel qt;",
-                                    min_lat, min_lon, max_lat, max_lon, min_lat, min_lon, max_lat, max_lon);
-    std::string url = "https://overpass-api.de/api/interpreter";
+                                    req.min_lat, req.min_lon, req.max_lat, req.max_lon, req.min_lat, req.min_lon, req.max_lat, req.max_lon);
 
+    // Launch ASYNC Task
+    // Captures all necessary data by value to avoid thread safety issues
     m_impl->active_fetches.push_back({area_key, std::async(std::launch::async,
-                                                           [url, query, cache_filename]() -> std::vector<building_t>
+                                                           [query, cache_filename, area_key, req]() -> std::optional<impl_t::fetch_result_t>
                                                            {
                                                              std::string json_data;
                                                              bool from_cache = false;
+
+                                                             // 1. Try Cache
                                                              if (std::filesystem::exists(cache_filename))
                                                              {
                                                                std::ifstream f(cache_filename);
@@ -570,27 +648,51 @@ auto building_service_t::update() -> bool
                                                                  from_cache = true;
                                                                }
                                                              }
+
+                                                             // 2. Network Fetch if needed
                                                              if (!from_cache || json_data.empty())
                                                              {
-                                                               // Sleep slightly to respect rate limit or avoid burst?
-                                                               // No, global limit of 2 is fine.
-                                                               cpr::Response r = cpr::Post(cpr::Url{url}, cpr::Body{query}, cpr::Header{{"User-Agent", "SensorMapper/0.1"}});
-                                                               if (r.status_code == 200)
+                                                               std::string url = "https://overpass-api.de/api/interpreter";
+                                                               cpr::Response r = cpr::Post(cpr::Url{url}, cpr::Body{query}, cpr::Timeout{120000}, cpr::Header{{"User-Agent", "SensorMapper/0.1"}});
+
+                                                               if (r.status_code == 200 && !r.text.empty())
                                                                {
                                                                  json_data = r.text;
+                                                                 // Only write to cache on success
                                                                  std::ofstream out(cache_filename);
                                                                  out << json_data;
                                                                }
                                                                else
                                                                {
-                                                                 std::cout << "OSM API error: " << r.status_code << std::endl;
-                                                                 return {};
+                                                                 // Return nullopt on failure
+                                                                 return std::nullopt;
                                                                }
                                                              }
-                                                             return impl_t::parse_osm_buildings_json(json_data);
+
+                                                             // 3. Parse & Prepare Indices (Heavy lifting)
+                                                             // This happens on background thread
+                                                             impl_t::fetch_result_t result;
+                                                             result.area_key = area_key;
+                                                             result.buildings = impl_t::parse_osm_buildings_json(json_data);
+
+                                                             // Calculate spatial indices for vectors
+                                                             // We can't insert into global map here (thread safety), but we can compute keys
+                                                             for (size_t i = 0; i < result.buildings.size(); ++i)
+                                                             {
+                                                               const auto &b = result.buildings[i];
+                                                               if (b->footprint.empty())
+                                                                 continue;
+
+                                                               // key for first point
+                                                               int lat_idx = static_cast<int>(std::floor(b->footprint[0].lat / GRID_CELL_SIZE));
+                                                               int lon_idx = static_cast<int>(std::floor(b->footprint[0].lon / GRID_CELL_SIZE));
+                                                               result.spatial_indices.emplace_back(std::make_pair(lat_idx, lon_idx), i);
+                                                             }
+
+                                                             return result;
                                                            })});
 
-    std::cout << "Started fetch for tile: " << area_key << ". Queue size: " << m_impl->request_queue.size() << std::endl;
+    std::cout << "Started fetch for tile: " << area_key << std::endl;
   }
 
   return new_data;
@@ -598,15 +700,17 @@ auto building_service_t::update() -> bool
 
 auto building_service_t::get_loading_status() const -> std::pair<int, int>
 {
-  return {static_cast<int>(m_impl->active_fetches.size()), static_cast<int>(m_impl->request_queue.size())};
+  return {static_cast<int>(m_impl->active_fetches.size()), static_cast<int>(m_impl->request_queue.size() + m_impl->failed_tiles.size())};
 }
 
 auto building_service_t::clear() -> void
 {
-  m_impl->buildings.clear();
+  m_impl->tile_storage.clear();
+  m_impl->spatial_grid.clear();
   m_impl->loaded_areas.clear();
   m_impl->active_fetches.clear();
   m_impl->request_queue.clear();
+  m_impl->queued_keys.clear();
 }
 
 } // namespace sensor_mapper
