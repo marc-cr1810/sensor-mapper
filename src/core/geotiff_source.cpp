@@ -100,9 +100,11 @@ auto geotiff_source_t::load() -> bool
     std::cerr << "GeoTIFF: Failed to init transformer for " << epsg_code << std::endl;
   }
 
-  // --- Generate Visualization Thumbnail (512x512) ---
-  m_visual_width = std::min((int)w, 512);
-  m_visual_height = std::min((int)h, 512);
+  // --- Generate Visualization Thumbnail ---
+  // Increased limit for better zoom resolution
+  constexpr int MAX_VISUAL_DIM = 4096;
+  m_visual_width = std::min((int)w, MAX_VISUAL_DIM);
+  m_visual_height = std::min((int)h, MAX_VISUAL_DIM);
   m_visual_data.assign(m_visual_width * m_visual_height, -1.0f);
 
   float min_ele = 1e10f;
@@ -352,6 +354,178 @@ auto geotiff_source_t::get_elevation(double lat, double lon, float &out_height) 
   }
 
   return false;
+}
+
+auto geotiff_source_t::get_visual_data_window(double min_lat, double max_lat, double min_lon, double max_lon, int &out_w, int &out_h, std::vector<float> &out_data) -> bool
+{
+  if (!m_loaded || !m_transformer || !m_transformer->is_valid())
+    return false;
+
+  // Determine window in Raster Coordinates
+  // We need to project the 4 corners to find the raster bounding box
+  double lats[4] = {max_lat, max_lat, min_lat, min_lat}; // TL, TR, BR, BL
+  double lons[4] = {min_lon, max_lon, max_lon, min_lon};
+
+  int min_x = m_width, max_x = 0;
+  int min_y = m_height, max_y = 0;
+
+  for (int i = 0; i < 4; ++i)
+  {
+    double proj_x, proj_y;
+    if (m_transformer->transform(lats[i], lons[i], proj_x, proj_y, false))
+    {
+      double px = (proj_x - m_origin_x) / m_scale_x;
+      double py = (m_origin_y - proj_y) / m_scale_y;
+
+      int x = static_cast<int>(std::floor(px));
+      int y = static_cast<int>(std::floor(py));
+
+      min_x = std::min(min_x, x);
+      max_x = std::max(max_x, x);
+      min_y = std::min(min_y, y);
+      max_y = std::max(max_y, y);
+    }
+  }
+
+  // Clamp to image bounds
+  min_x = std::max(0, min_x);
+  max_x = std::min(m_width - 1, max_x);
+  min_y = std::max(0, min_y);
+  max_y = std::min(m_height - 1, max_y);
+
+  if (min_x >= max_x || min_y >= max_y)
+    return false;
+
+  int raw_w = max_x - min_x + 1;
+  int raw_h = max_y - min_y + 1;
+
+  // Limit output resolution (e.g. max 1024x1024 per tile/view)
+  // If the requested area is huge, we downsample.
+  // If it's small, we get native resolution.
+  constexpr int MAX_RES = 1024;
+
+  // Actually, we should aim for what was requested or a reasonable limit.
+  // Let's set out_w/out_h to MIN(raw, MAX_RES) while preserving aspect ratio?
+  // Or just sample a fixed grid?
+  // Let's try to match aspect ratio of the window.
+
+  double aspect = (double)raw_w / raw_h;
+  if (raw_w > MAX_RES || raw_h > MAX_RES)
+  {
+    if (raw_w > raw_h)
+    {
+      out_w = MAX_RES;
+      out_h = static_cast<int>(MAX_RES / aspect);
+    }
+    else
+    {
+      out_h = MAX_RES;
+      out_w = static_cast<int>(MAX_RES * aspect);
+    }
+  }
+  else
+  {
+    out_w = raw_w;
+    out_h = raw_h;
+  }
+
+  if (out_w <= 0 || out_h <= 0)
+    return false;
+
+  out_data.resize(out_w * out_h);
+
+  // Read and resample
+  // For simplicity, nearest neighbor or simple average
+
+  std::lock_guard<std::mutex> lock(m_file_mutex);
+  TIFF *tif = TIFFOpen(m_path.string().c_str(), "r");
+  if (!tif)
+    return false;
+
+  // Optimization: Read scanlines needed
+  // We need to iterate over output pixels and map to input
+
+  // Cache check is hard here as we might skip rows.
+  // Better to read line by line of source if we can, or just read needed lines.
+  // If we are downsampling heavily, we skip lines.
+
+  // Allocate buffer for one scanline (max width)
+  float *buf = (float *)_TIFFmalloc(TIFFScanlineSize(tif));
+  if (!buf)
+  {
+    TIFFClose(tif);
+    return false;
+  }
+
+  // Precompute Y mapping to minimize seek
+  std::vector<int> source_rows(out_h);
+  for (int oy = 0; oy < out_h; ++oy)
+  {
+    double fy = (double)oy / out_h;
+    source_rows[oy] = min_y + static_cast<int>(fy * raw_h);
+  }
+
+  int current_row = -1;
+
+  float min_val = 1e10f, max_val = -1e10f;
+
+  for (int oy = 0; oy < out_h; ++oy)
+  {
+    int sy = source_rows[oy];
+    if (sy != current_row)
+    {
+      if (TIFFReadScanline(tif, buf, sy) < 0)
+      {
+        // Error or end
+        break;
+      }
+      current_row = sy;
+    }
+
+    for (int ox = 0; ox < out_w; ++ox)
+    {
+      double fx = (double)ox / out_w;
+      int sx = min_x + static_cast<int>(fx * raw_w);
+
+      if (sx >= 0 && sx < m_width)
+      {
+        float val = buf[sx];
+        // Stats for normalization
+        if (val > -1000.0f)
+        {
+          min_val = std::min(min_val, val);
+          max_val = std::max(max_val, val);
+        }
+        out_data[oy * out_w + ox] = val;
+      }
+      else
+      {
+        out_data[oy * out_w + ox] = -1.0f; // invalid
+      }
+    }
+  }
+
+  _TIFFfree(buf);
+  TIFFClose(tif);
+
+  // Normalize
+  if (max_val > min_val)
+  {
+    for (auto &v : out_data)
+    {
+      if (v > -1000.0f)
+        v = (v - min_val) / (max_val - min_val);
+      else
+        v = -1.0f;
+    }
+  }
+  else
+  {
+    // Flat or empty
+    std::fill(out_data.begin(), out_data.end(), 0.0f);
+  }
+
+  return true;
 }
 
 } // namespace sensor_mapper

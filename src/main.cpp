@@ -64,6 +64,7 @@ int main(int, char **)
   // Application State
   sensor_mapper::map_widget_t map_widget;
   sensor_mapper::elevation_service_t elevation_service;
+  map_widget.set_elevation_service(&elevation_service);
   std::vector<sensor_mapper::sensor_t> sensors;
 
   // UI Manager
@@ -87,6 +88,7 @@ int main(int, char **)
 
     // Update services
     elevation_service.update();
+    map_widget.update();
 
     // Start the Dear ImGui frame
     ImGui_ImplOpenGL3_NewFrame();

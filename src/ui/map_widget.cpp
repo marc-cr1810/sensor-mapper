@@ -196,7 +196,133 @@ auto map_widget_t::update() -> void
     m_heatmap_dirty = true; // Refresh RF calculation when new buildings are loaded
   }
 
+  // Check for view changes for dynamic resolution
+  if (m_dynamic_resolution_enabled && m_show_raster_visual)
+  {
+    static double last_center_lat = m_center_lat;
+    static double last_center_lon = m_center_lon;
+    static double last_zoom = m_zoom;
+
+    bool view_changed = (std::abs(m_center_lat - last_center_lat) > 1e-6 || std::abs(m_center_lon - last_center_lon) > 1e-6 || std::abs(m_zoom - last_zoom) > 1e-2);
+
+    if (view_changed)
+    {
+      m_last_view_change_time = ImGui::GetTime();
+      m_view_changed_since_update = true;
+      last_center_lat = m_center_lat;
+      last_center_lon = m_center_lon;
+      last_zoom = m_zoom;
+    }
+
+    // Debounce: Wait 500ms after last change
+    bool stable = (ImGui::GetTime() - m_last_view_change_time > 0.5);
+
+    if (m_view_changed_since_update && stable && !m_raster_update_pending)
+    {
+      // View is stable and we need an update.
+      m_view_changed_since_update = false;
+
+      if (m_elevation_service)
+      {
+        m_raster_update_pending = true;
+
+        // Capture state on main thread to pass safely
+        double z = m_zoom;
+        double lat = m_center_lat;
+        double lon = m_center_lon;
+
+        double world_size = 256.0 * std::pow(2.0, z);
+        double d_lat = (1000.0 / world_size) * 180.0;
+        double d_lon = (1000.0 / world_size) * 360.0;
+
+        double min_lat = lat - d_lat;
+        double max_lat = lat + d_lat;
+        double min_lon = lon - d_lon;
+        double max_lon = lon + d_lon;
+
+        std::vector<elevation_source_t *> sources;
+        for (const auto &s : m_elevation_service->get_sources())
+          sources.push_back(s.get());
+
+        m_raster_update_future = std::async(std::launch::async, [this, sources, min_lat, max_lat, min_lon, max_lon]() { this->update_raster_visual(sources, min_lat, max_lat, min_lon, max_lon); });
+      }
+    }
+
+    // Check if update completed
+    if (m_raster_update_pending)
+    {
+      // Check if future is ready (non-blocking check)
+      if (m_raster_update_future.valid() && m_raster_update_future.wait_for(std::chrono::seconds(0)) == std::future_status::ready)
+      {
+        m_raster_update_future.get(); // Join
+        m_raster_update_pending = false;
+
+        // Apply updates to OpenGL textures on main thread
+        std::lock_guard<std::mutex> lock(m_raster_update_mutex);
+        for (const auto &update : m_pending_raster_updates)
+        {
+          auto &tex = m_source_textures[update.source]; // access or create
+
+          // Ensure texture ID exists
+          if (tex.id == 0)
+            glGenTextures(1, &tex.id);
+
+          glBindTexture(GL_TEXTURE_2D, tex.id);
+          glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+          glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+          glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+          glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+          // Convert float to RGBA8
+          std::vector<uint32_t> rgba(update.w * update.h);
+          for (int i = 0; i < update.w * update.h; ++i)
+          {
+            float v = update.data[i];
+            if (v < -0.5f)
+            {
+              rgba[i] = 0x00000000;
+            }
+            else
+            {
+              uint8_t c = (uint8_t)(v * 255.0f);
+              rgba[i] = 0xFF000000 | (c << 16) | (c << 8) | c;
+            }
+          }
+
+          glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, update.w, update.h, 0, GL_RGBA, GL_UNSIGNED_BYTE, rgba.data());
+          tex.w = update.w;
+          tex.h = update.h;
+        }
+        m_pending_raster_updates.clear();
+      }
+    }
+  }
+
   // GPU engine is synchronous, no future check needed.
+}
+
+auto map_widget_t::update_raster_visual(std::vector<elevation_source_t *> sources, double min_lat, double max_lat, double min_lon, double max_lon) -> void
+{
+  std::vector<pending_raster_update_t> updates;
+
+  for (auto *source : sources)
+  {
+    pending_raster_update_t update;
+    update.source = source;
+    update.min_lat = min_lat;
+    update.max_lat = max_lat;
+    update.min_lon = min_lon;
+    update.max_lon = max_lon;
+
+    if (source->get_visual_data_window(min_lat, max_lat, min_lon, max_lon, update.w, update.h, update.data))
+    {
+      update.ready = true;
+      updates.push_back(std::move(update));
+    }
+  }
+
+  std::lock_guard<std::mutex> lock(m_raster_update_mutex);
+  m_pending_raster_updates = std::move(updates);
 }
 
 auto map_widget_t::set_center(double lat, double lon) -> void
@@ -1331,7 +1457,12 @@ auto map_widget_t::draw(std::vector<sensor_t> &sensors, std::set<int> &selected_
           }
 
           // Order: TL, TR, BR, BL maps to UVs: (0,0), (1,0), (1,1), (0,1)
-          draw_list->AddImageQuad((ImTextureID)(intptr_t)tex.id, quad_pts[0], quad_pts[1], quad_pts[2], quad_pts[3], ImVec2(0, 0), ImVec2(1, 0), ImVec2(1, 1), ImVec2(0, 1), IM_COL32(255, 255, 255, 128));
+          int alpha = static_cast<int>(m_raster_visual_opacity * 255.0f);
+          if (alpha < 0)
+            alpha = 0;
+          if (alpha > 255)
+            alpha = 255;
+          draw_list->AddImageQuad((ImTextureID)(intptr_t)tex.id, quad_pts[0], quad_pts[1], quad_pts[2], quad_pts[3], ImVec2(0, 0), ImVec2(1, 0), ImVec2(1, 1), ImVec2(0, 1), IM_COL32(255, 255, 255, alpha));
         }
         else if (double min_lat, max_lat, min_lon, max_lon; source->get_bounds(min_lat, max_lat, min_lon, max_lon))
         {

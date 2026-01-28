@@ -104,6 +104,24 @@ public:
     m_show_raster_visual = show;
   }
 
+  auto get_raster_visual_opacity() const -> float
+  {
+    return m_raster_visual_opacity;
+  }
+  auto set_raster_visual_opacity(float opacity) -> void
+  {
+    m_raster_visual_opacity = opacity;
+  }
+
+  auto get_dynamic_resolution_enabled() const -> bool
+  {
+    return m_dynamic_resolution_enabled;
+  }
+  auto set_dynamic_resolution_enabled(bool enabled) -> void
+  {
+    m_dynamic_resolution_enabled = enabled;
+  }
+
   auto get_viz_mode() const -> int
   {
     return m_viz_mode;
@@ -280,6 +298,13 @@ public:
   }
   auto update_playback(double dt) -> void;
   auto set_playback_pos(double t) -> void; // 0.0 to 1.0
+  auto set_playback_path(const std::vector<struct drone_path_result_t> &path) -> void;
+  auto set_playback_time(double t) -> void;
+
+  auto set_elevation_service(class elevation_service_t *service) -> void
+  {
+    m_elevation_service = service;
+  }
 
   // Forward declare SimulationResult to avoid include leak?
   // Probably better to include simulation_engine.hpp or just use a simplified struct/void* if we want to minimize deps.
@@ -456,6 +481,7 @@ private:
   bool m_show_elevation_sources = false;
   bool m_show_building_labels = false;
   bool m_show_raster_visual = false;
+  float m_raster_visual_opacity = 0.5f;
   int m_viz_mode = 0;
 
   bool m_show_scale_bar = true;
@@ -522,6 +548,8 @@ private:
   double m_cached_render_min_lon = 0.0;
   double m_cached_render_max_lon = 0.0;
 
+  class elevation_service_t *m_elevation_service = nullptr;
+
   double m_cursor_alt = 0.0;
   int m_current_map_source = 0;
 
@@ -543,6 +571,27 @@ private:
 
   PlaybackState m_playback_state;
   std::vector<double> m_path_time_offsets; // Time in seconds for each point in m_drone_path
+
+  // Dynamic Resolution State
+  bool m_dynamic_resolution_enabled = true;
+  double m_last_view_change_time = 0.0;
+  bool m_view_changed_since_update = false;
+  std::future<void> m_raster_update_future;
+  bool m_raster_update_pending = false;
+
+  // Temporary buffer for async loading to avoid threading issues with OpenGL
+  struct pending_raster_update_t
+  {
+    const elevation_source_t *source;
+    std::vector<float> data;
+    int w, h;
+    double min_lat, max_lat, min_lon, max_lon;
+    bool ready = false;
+  };
+  std::vector<pending_raster_update_t> m_pending_raster_updates;
+  std::mutex m_raster_update_mutex;
+
+  auto update_raster_visual(std::vector<class elevation_source_t *> sources, double min_lat, double max_lat, double min_lon, double max_lon) -> void;
 };
 
 } // namespace sensor_mapper

@@ -27,6 +27,7 @@ public:
   }
 
   auto get_visual_data(int &w, int &h) const -> const float * override;
+  auto get_visual_data_window(double min_lat, double max_lat, double min_lon, double max_lon, int &out_w, int &out_h, std::vector<float> &out_data) -> bool override;
 
   auto load() -> bool;
   auto get_scanline(int row) -> const float *;

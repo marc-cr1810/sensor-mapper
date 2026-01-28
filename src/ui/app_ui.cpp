@@ -696,6 +696,35 @@ void AppUI::render_elevation_data(elevation_service_t &elevation_service, map_wi
   static std::string status_message = "";
   static bool status_is_error = false;
 
+  bool show_raster = map.get_show_raster_visual();
+  if (ImGui::Checkbox("Show Raster Overlay", &show_raster))
+  {
+    map.set_show_raster_visual(show_raster);
+  }
+
+  if (show_raster)
+  {
+    float opacity = map.get_raster_visual_opacity();
+    if (ImGui::SliderFloat("Opacity", &opacity, 0.0f, 1.0f))
+    {
+      map.set_raster_visual_opacity(opacity);
+    }
+
+    bool dyn_res = map.get_dynamic_resolution_enabled();
+    if (ImGui::Checkbox("Dynamic Resolution", &dyn_res))
+    {
+      map.set_dynamic_resolution_enabled(dyn_res);
+    }
+  }
+
+  bool show_elevation = map.get_show_elevation_sources();
+  if (ImGui::Checkbox("Enable Elevation Data", &show_elevation))
+  {
+    map.set_show_elevation_sources(show_elevation);
+  }
+
+  ImGui::Separator();
+
   if (ImGui::Button("Load File...", ImVec2(-1, 0)))
   {
     auto selection = pfd::open_file("Open Elevation Data", ".", {"Elevation Files", "*.tif *.tiff *.las *.laz", "GeoTIFF", "*.tif *.tiff", "LIDAR", "*.las *.laz", "All Files", "*"}, pfd::opt::none).result();
